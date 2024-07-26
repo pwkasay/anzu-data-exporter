@@ -1,12 +1,22 @@
-import logging
-import os
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
-
-from dotenv import load_dotenv
-import requests
+import csv
 import json
+import logging
+import mimetypes
+import os
 import time
+from datetime import datetime
+from io import BytesIO
+from typing import re
+
+import openai
+
+import PyPDF2
+import docx
+import pandas as pd
+import requests
+from dateutil.relativedelta import relativedelta
+from dotenv import load_dotenv
+from pptx import Presentation
 
 
 def get_secrets():
@@ -65,13 +75,11 @@ owner_details_cache = {}
 def fetch_owner_details(owner_id):
     if owner_id in owner_details_cache:
         return owner_details_cache[owner_id]
-
     url = f"https://api.hubapi.com/owners/v2/owners/{owner_id}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
     }
-
     retries = 3
     while retries > 0:
         try:
@@ -87,6 +95,235 @@ def fetch_owner_details(owner_id):
             time.sleep(2 ** (3 - retries))  # Exponential backoff
 
 
+def fetch_and_attach_owner_details(deals, owner_property):
+    owner_ids = [
+        deal["properties"].get(owner_property)
+        for deal in deals
+        if deal["properties"].get(owner_property)
+    ]
+    unique_owner_ids = list(set(owner_ids))
+    owners = {}
+    for owner_id in unique_owner_ids:
+        owners[owner_id] = fetch_owner_details(owner_id)
+        time.sleep(0.1)  # Throttle requests to avoid hitting rate limits
+    for deal in deals:
+        owner_id = deal["properties"].get(owner_property)
+        if owner_id:
+            deal[f"{owner_property}_details"] = owners.get(owner_id, {})
+    return deals
+
+
+def fetch_notes(deal_id):
+    url = f"https://api.hubapi.com/crm/v3/objects/notes/search"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+    }
+    search_body = {
+        "filterGroups": [
+            {
+                "filters": [
+                    {
+                        "propertyName": "associations.deal",
+                        "operator": "EQ",
+                        "value": deal_id,
+                    }
+                ]
+            }
+        ],
+        "properties": ["hs_note_body", "hs_attachment_ids"]
+    }
+    retries = 3
+    while retries > 0:
+        try:
+            response = requests.post(url, headers=headers, data=json.dumps(search_body))
+            response.raise_for_status()
+            return response.json().get('results', [])
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to fetch notes for deal ID {deal_id}: {e}")
+            retries -= 1
+            if retries == 0:
+                raise
+            time.sleep(2 ** (3 - retries))  # Exponential backoff
+
+
+def download_file(url):
+    response = requests.get(url)
+    response.raise_for_status()
+    return response.content
+
+
+def read_pdf(file_content):
+    pdf_reader = PyPDF2.PdfReader(BytesIO(file_content))
+    text = ""
+    for page_num in range(len(pdf_reader.pages)):
+        page = pdf_reader.pages[page_num]
+        text += page.extract_text()
+    return text
+
+
+def read_word(file_content):
+    doc = docx.Document(BytesIO(file_content))
+    text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    return text
+
+
+def read_excel(file_content):
+    excel_file = pd.ExcelFile(BytesIO(file_content))
+    sheets = {}
+    for sheet_name in excel_file.sheet_names:
+        sheets[sheet_name] = excel_file.parse(sheet_name)
+    return sheets
+
+
+def read_ppt(file_content):
+    presentation = Presentation(BytesIO(file_content))
+    text = ""
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text += shape.text + "\n"
+    return text
+
+
+def update_file_access(file_id, access_level):
+    url = f"https://api.hubapi.com/files/v3/files/{file_id}"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "options": {
+            "access": access_level
+        }
+    }
+    response = requests.patch(url, headers=headers, data=json.dumps(data))
+    response.raise_for_status()
+    return response.json()
+
+
+def generate_signed_url(file_id):
+    url = f"https://api.hubapi.com/files/v3/files/{file_id}/signed-url"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json()["url"]
+
+
+def get_file_details(file_id):
+    url = f"https://api.hubapi.com/files/v3/files/{file_id}"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json()
+
+
+# def fetch_attachment(file_id):
+#     url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+#     }
+#     retries = 3
+#     while retries > 0:
+#         try:
+#             response = requests.get(url, headers=headers)
+#             response.raise_for_status()
+#             file = response.json()
+#             file_url = file['url']
+#             print("FILE--", file)
+#             if file_url:
+#                 file_content = download_file(file_url)
+#                 return file_content, file_info["name"], signed_url
+#             else:
+#                 raise Exception(f"No URL found for file ID {file_id}")
+#         except requests.exceptions.RequestException as e:
+#             logging.error(f"Failed to fetch attachment for file ID {file_id}: {e}")
+#             retries -= 1
+#             if retries == 0:
+#                 raise
+#             time.sleep(2 ** (3 - retries))  # Exponential backoff
+
+
+def attach_notes(deals):
+    for deal in deals:
+        time.sleep(0.5)
+        deal_id = deal['id']
+        notes = fetch_notes(deal_id)
+        deal['notes'] = notes
+    return deals
+
+
+def attach_attachments(deals):
+    for deal in deals:
+        if deal['notes']:
+            for note in deal['notes']:
+                if note['properties']['hs_attachment_ids']:
+                    file_id = note['properties']['hs_attachment_ids']
+                    print("File id:", file_id)
+                    time.sleep(0.5)
+                    print("trying to attach attachment")
+                    attachment = fetch_attachment(file_id)
+                    deal['attachments'] = attachment
+    return deals
+
+#
+# def process_attachment(file_id):
+#     file_content, file_name, signed_url = fetch_attachment(file_id)
+#
+#     # Detect MIME type using mimetypes
+#     mime_type, _ = mimetypes.guess_type(signed_url)
+#
+#     if mime_type == "application/pdf":
+#         return read_pdf(file_content)
+#     elif mime_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]:
+#         return read_word(file_content)
+#     elif mime_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"]:
+#         return read_excel(file_content)
+#     elif mime_type in ["application/vnd.openxmlformats-officedocument.presentationml.presentation",
+#                        "application/vnd.ms-powerpoint"]:
+#         return read_ppt(file_content)
+#     else:
+#         raise ValueError(f"Unsupported file type: {mime_type}")
+
+
+def fetch_engagements(deal_id, engagement_type="EMAIL"):
+    url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    params = {
+        "limit": 100,
+        "offset": 0
+    }
+    engagements = []
+    while True:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        engagements.extend(
+            [engagement for engagement in data['results'] if engagement['engagement']['type'] == engagement_type])
+        if not data['hasMore']:
+            break
+        params['offset'] = data['offset']
+    return engagements
+
+
+def attach_engagements(deals):
+    for deal in deals:
+        time.sleep(0.5)
+        deal_id = deal['id']
+        engagements = fetch_engagements(deal_id)
+        deal['engagements'] = engagements
+    return deals
+
+
 def fetch_deals(start_date=None, end_date=None):
     properties = [
         "dealname",
@@ -100,9 +337,7 @@ def fetch_deals(start_date=None, end_date=None):
         "team_member_1",
         "createdate",
     ]
-
     deals = []
-
     if start_date is None and end_date is None:
         start_date = str(datetime.now().date() + relativedelta(months=-3))
         end_date = str(datetime.now().date() + relativedelta(days=+1))
@@ -114,7 +349,6 @@ def fetch_deals(start_date=None, end_date=None):
     # Convert the close date to a Unix timestamp in milliseconds
     start_date = int(start_date.timestamp() * 1000)
     end_date = int(end_date.timestamp() * 1000)
-
     after = None
     while True:
         search_body = {
@@ -143,22 +377,164 @@ def fetch_deals(start_date=None, end_date=None):
         else:
             break
 
-    owner_ids = [
-        deal["properties"].get("hubspot_owner_id")
-        for deal in deals
-        if deal["properties"].get("hubspot_owner_id")
-    ]
-
-    unique_owner_ids = list(set(owner_ids))
-
-    owners = {}
-    for owner_id in unique_owner_ids:
-        owners[owner_id] = fetch_owner_details(owner_id)
-        time.sleep(0.1)  # Throttle requests to avoid hitting rate limits
-
-    for deal in deals:
-        owner_id = deal["properties"].get("hubspot_owner_id")
-        if owner_id:
-            deal["owner_details"] = owners.get(owner_id, {})
-
     return deals
+
+def get_engagements_for_deal(deal_id):
+    url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return response.json()
+
+def fetch_attachment(file_id):
+    url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+
+    file_url = response.json()["url"]
+    extension = response.json()["extension"]
+    name = response.json()["name"]
+
+    file_content = download_file(file_url)
+    if extension == "pdf":
+        return read_pdf(file_content)
+    elif extension == "docx":
+        return read_word(file_content)
+    elif extension == "xlsx":
+        return read_excel(file_content)
+    elif extension == "pptx":
+        return read_ppt(file_content)
+    else:
+        raise ValueError(f"Unsupported file type: {extension}")
+
+
+def organize_deals(deals):
+    deals_dict = {}
+    for deal in deals:
+        broad_category = deal['properties']['broad_category_updated']
+        if broad_category not in deals_dict:
+            deals_dict[broad_category] = deal
+    return deals_dict
+
+
+def read_prompt_text(text_path):
+    try:
+        with open(text_path, "r") as file:
+            return file.read()
+    except FileNotFoundError:
+        return "Flag as no prompt"
+
+
+gpt_prompt_path = "data/gpt_prompt.txt"
+gpt_prompt = read_prompt_text(gpt_prompt_path)
+
+def create_openai_client(OPEN_AI_KEY):
+    openai_client = openai.OpenAI(api_key=OPEN_AI_KEY)
+    return openai_client
+
+openai_client = create_openai_client(OPEN_AI_KEY)
+
+
+def parse_with_chatgpt(openai_client, deal):
+    try:
+        messages = [
+            {"role": "system", "content": gpt_prompt},
+            {
+                "role": "user",
+                "content": f"Deal info: {deal}",
+            },
+        ]
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=2500,
+            n=1,
+            stop=None,
+            temperature=0.5,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logging.error(f"Error communicating with ChatGPT: {e}")
+        return None
+
+
+
+deals = fetch_deals(start_date='2024-07-01', end_date='2024-07-27')
+deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+deals = fetch_and_attach_owner_details(deals, "team_member_1")
+deals = attach_notes(deals)
+deals = attach_attachments(deals)
+deals = attach_engagements(deals)
+
+deal_recommendations = []
+for deal in deals[0:4]:
+    recommendation = parse_with_chatgpt(openai_client, deal)
+    deal_recommendations.append(recommendation)
+
+
+json_recommendation = []
+for rec in deal_recommendations:
+    json_match = re.search(r'json\n({.*?})\n', rec, re.DOTALL)
+    if json_match:
+        json_string = json_match.group(1)
+        deal_data = json.loads(json_string)
+        json_recommendation.append(deal_data)
+    else:
+        raise ValueError("JSON data not found in the input string")
+
+
+csv_file = "deal_info.csv"
+with open(csv_file, mode='w', newline='', encoding='utf-8') as file:
+    writer = csv.writer(file)
+# Write header
+    writer.writerow(list(json_recommendation[0].keys()))
+# Write data
+    for deal in json_recommendation:
+        writer.writerow(list(deal.values()))
+
+
+# rip out before the dashes
+# no need to ground on the first pass
+# then ground on the second
+# fast expensive version keep for ondemand
+# slow cheaper version runs as job
+
+# slack a tweaked 100 deal csv
+
+# add batching for 5000 deals
+# before we talk to Whitney - here is the output 5000 deals
+
+
+
+print(f"CSV file '{csv_file}' created successfully.")
+
+
+
+deal_dict = organize_deals(deals)
+
+deals_with_notes = []
+
+for deal in deals:
+    if deal['notes']:
+        deals_with_notes.append(deal)
+
+for d in deals_with_notes:
+    print(f"{d['properties']['dealname']}--{d['id']}--{d['notes']}")
+
+
+deals_with_attachments= []
+
+for deal in deals:
+    if deal.get('attachments'):
+        deals_with_attachments.append(deal)
+
+
+
+
