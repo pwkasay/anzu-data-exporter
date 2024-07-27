@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime
 from io import BytesIO
-from typing import re
+import re
 
 import openai
 
@@ -113,7 +113,7 @@ def fetch_and_attach_owner_details(deals, owner_property):
     return deals
 
 
-def fetch_notes(deal_id):
+def  fetch_notes(deal_id):
     url = f"https://api.hubapi.com/crm/v3/objects/notes/search"
     headers = {
         "Content-Type": "application/json",
@@ -252,7 +252,7 @@ def get_file_details(file_id):
 
 def attach_notes(deals):
     for deal in deals:
-        time.sleep(0.5)
+        # time.sleep(0.5)
         deal_id = deal['id']
         notes = fetch_notes(deal_id)
         deal['notes'] = notes
@@ -265,9 +265,7 @@ def attach_attachments(deals):
             for note in deal['notes']:
                 if note['properties']['hs_attachment_ids']:
                     file_id = note['properties']['hs_attachment_ids']
-                    print("File id:", file_id)
-                    time.sleep(0.5)
-                    print("trying to attach attachment")
+                    # time.sleep(0.4)
                     attachment = fetch_attachment(file_id)
                     deal['attachments'] = attachment
     return deals
@@ -474,7 +472,8 @@ deals = attach_attachments(deals)
 deals = attach_engagements(deals)
 
 deal_recommendations = []
-for deal in deals[0:4]:
+# for deal in deals[0:4]:
+for deal in deals:
     recommendation = parse_with_chatgpt(openai_client, deal)
     deal_recommendations.append(recommendation)
 
@@ -488,7 +487,6 @@ for rec in deal_recommendations:
         json_recommendation.append(deal_data)
     else:
         raise ValueError("JSON data not found in the input string")
-
 
 csv_file = "deal_info.csv"
 with open(csv_file, mode='w', newline='', encoding='utf-8') as file:
@@ -511,11 +509,7 @@ with open(csv_file, mode='w', newline='', encoding='utf-8') as file:
 # add batching for 5000 deals
 # before we talk to Whitney - here is the output 5000 deals
 
-
-
 print(f"CSV file '{csv_file}' created successfully.")
-
-
 
 deal_dict = organize_deals(deals)
 
