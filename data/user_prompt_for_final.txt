@@ -1,0 +1,7 @@
+I have a list of deals that my venture capital firm has evaluated in this attached dataset.  At our firm, we categorize deals into broad categories and then further segment those deals into subcategories within the broad categories.  In the attached csv, you can find those listed as "broad_category_updated" and "subcategory".
+We would like to replace the existing subcategories with new subcategories because we do not think the existing set accurately reflects the nature of the deals.  For each deal, we have identified potential subcategory names that would have worked better for that specific deal, listed under "recommendation".
+I want you to generate a new csv that lists only these items:
+1. Broad categories (using exactly the existing broad categories)
+2. New subcategories.
+I want you to generate the new subcategories yourself as a replacement for the existing subcategories.  To identify new subcategories, use the "recommendation" list as a reference as to what types of subcategories could be useful.  Then please generate exactly 10 subcategories per broad category.  The subcategories should be MECE (e.g., comprehensive and not overlapping).
+Please keep the response limited to json format similar to this: {"broad_category":["subcategory1","subcategory2"]}
