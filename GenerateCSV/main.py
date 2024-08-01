@@ -502,6 +502,66 @@ system_prompt_for_final_path = "data/system_prompt_for_final.txt"
 system_prompt_for_final = read_prompt_text(system_prompt_for_final_path)
 
 
+# {"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo-0125", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
+# {"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo-0125", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
+
+def batch_with_chatgpt(openai_client, deals):
+    jsonl_lines = []
+    for deal in deals:
+        prompt = {
+                "custom_id": deal['properties']['dealname'],
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gpt-4o",
+                    "messages": [
+                        {"role": "system", "content": gpt_prompt},
+                        {"role": "user", "content": f"Deal info: {deal}"}
+                    ],
+                    "max_tokens": 2500,
+                    "n": 1,
+                    "stop": None,
+                    "temperature": 0.5
+                    }
+                }
+        jsonl_lines.append(json.dumps(prompt))
+    with open('deals_prompts.jsonl', 'w') as f:
+        for line in jsonl_lines:
+            f.write(line + '\n')
+    batch_input_file = openai_client.files.create(
+        file=open("deals_prompts.jsonl", "rb"),
+        purpose="batch"
+    )
+    batch_input_file_id = batch_input_file.id
+    batch = openai_client.batches.create(
+        input_file_id=batch_input_file_id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h",
+        metadata={
+            "description": "deal data recommendation generator"
+        }
+    )
+    return batch
+
+
+def check_gpt(openai_client, batch):
+    # check status
+    file_response = None
+    retrieved_batch = openai_client.batches.retrieve(batch.id)
+    if retrieved_batch.status == "completed":
+        file_response = openai_client.files.content(retrieved_batch.output_file_id)
+        return file_response.text
+
+def delete_batch_file(openai_client, batch):
+    # finish delete file
+
+    all_batches = openai_client.batches.list(limit=10)
+    # delete function
+    files = openai_client.File.list()
+
+    openai_client.files.delete(batch.output_file_id)
+
+
 def compile_with_chatgpt(openai_client, cleaned_deals):
     try:
         messages = [
@@ -523,3 +583,59 @@ def compile_with_chatgpt(openai_client, cleaned_deals):
     except Exception as e:
         print(f"Error: {e}")
         return None
+
+
+
+def add_field_to_deal(field):
+    url = "https://api.hubapi.com/properties/v1/deals/properties"
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {HUBSPOT_API_KEY}',
+    }
+
+    label = field
+    name = field.replace(' ', '_').lower()
+
+    payload = {
+        "name": "broad_category",
+        "label": "Broad Category",
+        "description": "The broad category of the deal",
+        "groupName": "dealinformation",
+        "type": "string",
+        "fieldType": "text"
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+
+    if response.status_code == 201:
+        print("Custom property created successfully!")
+    else:
+        print(f"Failed to create property: {response.status_code}, {response.text}")
+
+def update_deal(deal):
+    update_url = f'https://api.hubapi.com/deals/v1/deal/{deal.id}'
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    update_payload = {
+        "properties": [
+            {
+                "name": "broad_category_updated",
+                "value": "value"
+            },
+            {
+                "name": "subcategory",
+                "value": "value"
+            }
+        ]
+    }
+
+    response = requests.put(update_url, json=update_payload, headers=headers)
+
+    if response.status_code == 200:
+        print("Deal updated successfully!")
+    else:
+        print(f"Failed to update deal: {response.status_code}, {response.text}")
