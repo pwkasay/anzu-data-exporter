@@ -618,7 +618,7 @@ def create_hubspot_field():
     pass
 
 def update_hubspot_keywords(deal):
-    update_url = f'https://api.hubapi.com/deals/v1/deal/{deal['id']}'
+    update_url = f"https://api.hubapi.com/deals/v1/deal/{deal['id']}"
     headers = {
         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
         "Content-Type": "application/json"
