@@ -2,6 +2,7 @@ from GenerateCSV.main import *
 import azure.functions as func
 import logging
 
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
     print("Main triggered")
@@ -11,9 +12,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     # Initial csv
     # Final csv
 
-    req_body = req.get_json()
-    start_date = req_body.get('start_date', None)
-    end_date = req_body.get('end_date', None)
+    start_date = req.params.get('start_date', None)
+    end_date = req.params.get('end_date', None)
 
     # Generate the CSV in-memory
     try:
