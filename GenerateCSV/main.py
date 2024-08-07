@@ -1,25 +1,18 @@
-import csv
+import io
 import json
 import logging
-import mimetypes
 import os
 import time
 from datetime import datetime
 from io import BytesIO
-import re
-
-import openai
-import http
 
 import PyPDF2
 import docx
+import openai
 import pandas as pd
 import requests
 from dateutil.relativedelta import relativedelta
-from dotenv import load_dotenv
 from pptx import Presentation
-
-from urllib.parse import urlparse, quote, urlunparse
 
 
 def get_secrets():
@@ -43,10 +36,10 @@ def get_secrets():
         logging.error(f"Failed to retrieve secrets: {e}")
         raise
 
-
-mode = "dev"
-if mode == "dev":
-    load_dotenv()
+# from dotenv import load_dotenv
+# mode = "dev"
+# if mode == "dev":
+#     load_dotenv()
 
 (
     CLIENT_ID,
@@ -281,26 +274,6 @@ def attach_attachments(deals):
     return deals
 
 
-#
-# def process_attachment(file_id):
-#     file_content, file_name, signed_url = fetch_attachment(file_id)
-#
-#     # Detect MIME type using mimetypes
-#     mime_type, _ = mimetypes.guess_type(signed_url)
-#
-#     if mime_type == "application/pdf":
-#         return read_pdf(file_content)
-#     elif mime_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword"]:
-#         return read_word(file_content)
-#     elif mime_type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"]:
-#         return read_excel(file_content)
-#     elif mime_type in ["application/vnd.openxmlformats-officedocument.presentationml.presentation",
-#                        "application/vnd.ms-powerpoint"]:
-#         return read_ppt(file_content)
-#     else:
-#         raise ValueError(f"Unsupported file type: {mime_type}")
-
-
 def fetch_engagements(deal_id, engagement_type="EMAIL"):
     url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
     headers = {
@@ -345,6 +318,7 @@ def fetch_deals(start_date=None, end_date=None):
         "hubspot_owner_id",
         "team_member_1",
         "createdate",
+        "keywords",
     ]
     deals = []
     if start_date is None and end_date is None:
@@ -639,3 +613,74 @@ def update_deal(deal):
         print("Deal updated successfully!")
     else:
         print(f"Failed to update deal: {response.status_code}, {response.text}")
+
+def create_hubspot_field():
+    pass
+
+def update_hubspot_keywords(deal):
+    update_url = f'https://api.hubapi.com/deals/v1/deal/{deal['id']}'
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    if deal.get('parsed'):
+        if deal['parsed'].get('recommendation'):
+            rec_keys = str(deal['parsed']['recommendation'])
+            update_payload = {
+                "properties": [
+                    {
+                        "name": "keywords",
+                        "value": rec_keys
+                    }
+                ]
+            }
+            response = requests.put(update_url, json=update_payload, headers=headers)
+            return response
+
+
+def export_csv(start_date=None, end_date=None):
+    deals = fetch_deals(start_date=start_date, end_date=end_date)
+    deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+    deals = fetch_and_attach_owner_details(deals, "team_member_1")
+    flattened_data = []
+    for deal in deals:
+        flattened_entry = deal['properties'].copy()
+        flattened_entry['id'] = deal['id']
+        flattened_entry['createdAt'] = deal['createdAt']
+        flattened_entry['updatedAt'] = deal['updatedAt']
+        flattened_entry['archived'] = deal['archived']
+        # Concatenate firstName and lastName for Lead Owner
+        if deal.get('hubspot_owner_id_details'):
+            lead_owner = deal.pop('hubspot_owner_id_details')
+            flattened_entry['Lead Owner Name'] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
+            flattened_entry['Lead Owner Email'] = lead_owner['email']
+        # Concatenate firstName and lastName for Support Member
+        if deal.get('team_member_1_details'):
+            support_member = deal.pop('team_member_1_details')
+            flattened_entry['Support Member Name'] = f"{support_member['firstName']} {support_member['lastName']}"
+            flattened_entry['Support Member Email'] = support_member['email']
+        flattened_data.append(flattened_entry)
+
+    # Convert to DataFrame
+    df = pd.DataFrame(flattened_data)
+
+    # Select only the necessary columns
+    columns_to_include = ['broad_category_updated', 'createdate', 'dealname', 'fund', 'keywords',
+           'pipeline', 'priority', 'referral_type', 'subcategory',
+           'id', 'createdAt', 'updatedAt', 'archived', 'Lead Owner Name',
+           'Lead Owner Email', 'Support Member Name', 'Support Member Email']
+    #
+    df = df[columns_to_include]
+
+    if start_date is None and end_date is None:
+        start_date = str(datetime.now().date() + relativedelta(months=-3))
+        end_date = str(datetime.now().date() + relativedelta(days=+1))
+    start_date = str(datetime.strptime(start_date, "%Y-%m-%d"))
+    end_date = str(datetime.strptime(end_date, "%Y-%m-%d"))
+    # Save to CSV
+    file_object = io.StringIO
+    df.to_csv(file_object, index=False)
+    file_object.seek(0)
+    filename = f'Deal_Export--{start_date}-{end_date}.csv'
+
+    return file_object, filename
