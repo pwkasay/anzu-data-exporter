@@ -675,10 +675,10 @@ def export_csv(start_date=None, end_date=None):
     if start_date is None and end_date is None:
         start_date = str(datetime.now().date() + relativedelta(months=-3))
         end_date = str(datetime.now().date() + relativedelta(days=+1))
-    start_date = str(datetime.strptime(start_date, "%Y-%m-%d"))
-    end_date = str(datetime.strptime(end_date, "%Y-%m-%d"))
+    start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
+    end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
     # Save to CSV
-    file_object = io.StringIO
+    file_object = io.StringIO()
     df.to_csv(file_object, index=False)
     file_object.seek(0)
     filename = f'Deal_Export--{start_date}-{end_date}.csv'
