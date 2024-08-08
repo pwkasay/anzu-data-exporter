@@ -333,6 +333,12 @@ def fetch_deals(start_date=None, end_date=None):
     start_date = int(start_date.timestamp() * 1000)
     end_date = int(end_date.timestamp() * 1000)
     after = None
+
+    max_retries = 3
+    base_delay = 0.5
+
+    search_results = None
+
     while True:
         search_body = {
             "filterGroups": [
@@ -357,7 +363,19 @@ def fetch_deals(start_date=None, end_date=None):
         }
         if after:
             search_body["after"] = after
-        search_results = search_hubspot_object("deals", search_body)
+
+        for attempt in range(max_retries):
+            try:
+                search_results = search_hubspot_object("deals", search_body)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (attempt ** 2)
+                    time.sleep(delay)
+                else:
+                    print(f"Attempt {attempt + 1} failed: {e}. No more retries left.")
+                    raise
+
         deals.extend(search_results.get("results", []))
         pagination = search_results.get("paging", [])
         if pagination and "next" in pagination:
