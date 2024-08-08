@@ -1,4 +1,4 @@
-from GenerateCSV.main import *
+from main import *
 import azure.functions as func
 import logging
 
