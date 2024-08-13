@@ -14,6 +14,8 @@ import requests
 from dateutil.relativedelta import relativedelta
 from pptx import Presentation
 
+import azure.durable_functions as df
+
 
 def get_secrets():
     try:
@@ -36,10 +38,12 @@ def get_secrets():
         logging.error(f"Failed to retrieve secrets: {e}")
         raise
 
-# from dotenv import load_dotenv
-# mode = "dev"
-# if mode == "dev":
-#     load_dotenv()
+
+from dotenv import load_dotenv
+
+mode = "dev"
+if mode == "dev":
+    load_dotenv()
 
 (
     CLIENT_ID,
@@ -130,6 +134,7 @@ def fetch_notes(deal_id):
         "properties": ["hs_note_body", "hs_attachment_ids"]
     }
     retries = 3
+    base_delay = 0.2
     while retries > 0:
         try:
             response = requests.post(url, headers=headers, data=json.dumps(search_body))
@@ -139,7 +144,7 @@ def fetch_notes(deal_id):
             retries -= 1
             if retries == 0:
                 raise
-            time.sleep(2 ** (3 - retries))  # Exponential backoff
+            time.sleep(2 ** (3 - retries) * base_delay)  # Exponential backoff
 
 
 def download_file(url):
@@ -216,33 +221,6 @@ def get_file_details(file_id):
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     return response.json()
-
-
-# def fetch_attachment(file_id):
-#     url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#     }
-#     retries = 3
-#     while retries > 0:
-#         try:
-#             response = requests.get(url, headers=headers)
-#             response.raise_for_status()
-#             file = response.json()
-#             file_url = file['url']
-#             print("FILE--", file)
-#             if file_url:
-#                 file_content = download_file(file_url)
-#                 return file_content, file_info["name"], signed_url
-#             else:
-#                 raise Exception(f"No URL found for file ID {file_id}")
-#         except requests.exceptions.RequestException as e:
-#             logging.error(f"Failed to fetch attachment for file ID {file_id}: {e}")
-#             retries -= 1
-#             if retries == 0:
-#                 raise
-#             time.sleep(2 ** (3 - retries))  # Exponential backoff
 
 
 def attach_notes(deals):
@@ -501,21 +479,24 @@ def batch_with_chatgpt(openai_client, deals):
     jsonl_lines = []
     for deal in deals:
         prompt = {
-                "custom_id": deal['properties']['dealname'],
-                "method": "POST",
-                "url": "/v1/chat/completions",
-                "body": {
-                    "model": "gpt-4o",
-                    "messages": [
-                        {"role": "system", "content": gpt_prompt},
-                        {"role": "user", "content": f"Deal info: {deal}"}
-                    ],
-                    "max_tokens": 2500,
-                    "n": 1,
-                    "stop": None,
-                    "temperature": 0.5
-                    }
-                }
+            "custom_id": deal['properties']['dealname'],
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": "gpt-4o",
+                "response_format": {
+                    "type": "json_object"
+                },
+                "messages": [
+                    {"role": "system", "content": gpt_prompt},
+                    {"role": "user", "content": f"Deal info: {deal}"}
+                ],
+                "max_tokens": 2500,
+                "n": 1,
+                "stop": None,
+                "temperature": 0.5
+            }
+        }
         jsonl_lines.append(json.dumps(prompt))
     with open('deals_prompts.jsonl', 'w') as f:
         for line in jsonl_lines:
@@ -540,19 +521,28 @@ def check_gpt(openai_client, batch):
     # check status
     file_response = None
     retrieved_batch = openai_client.batches.retrieve(batch.id)
-    if retrieved_batch.status == "completed":
+    if retrieved_batch.status == "completed" and retrieved_batch.output_file_id:
         file_response = openai_client.files.content(retrieved_batch.output_file_id)
-        return file_response.text
+        return file_response.content
+    elif retrieved_batch.status == "completed" and retrieved_batch.error_file_id:
+        file_response = openai_client.files.content(retrieved_batch.error_file_id)
+        return file_response.content
+    else:
+        return retrieved_batch.status
+
 
 def delete_batch_file(openai_client, batch):
     # finish delete file
 
     all_batches = openai_client.batches.list(limit=10)
     # delete function
-    files = openai_client.File.list()
+    files = openai_client.files.list()
 
     openai_client.files.delete(batch.output_file_id)
 
+
+# for file in files:
+#     openai_client.files.delete(file.id)
 
 def compile_with_chatgpt(openai_client, cleaned_deals):
     try:
@@ -575,7 +565,6 @@ def compile_with_chatgpt(openai_client, cleaned_deals):
     except Exception as e:
         print(f"Error: {e}")
         return None
-
 
 
 def add_field_to_deal(field):
@@ -605,6 +594,7 @@ def add_field_to_deal(field):
     else:
         print(f"Failed to create property: {response.status_code}, {response.text}")
 
+
 def update_deal(deal):
     update_url = f'https://api.hubapi.com/deals/v1/deal/{deal.id}'
     headers = {
@@ -632,8 +622,10 @@ def update_deal(deal):
     else:
         print(f"Failed to update deal: {response.status_code}, {response.text}")
 
+
 def create_hubspot_field():
     pass
+
 
 def update_hubspot_keywords(deal):
     update_url = f"https://api.hubapi.com/deals/v1/deal/{deal['id']}"
@@ -656,49 +648,133 @@ def update_hubspot_keywords(deal):
             return response
 
 
+def get_stage_mapping():
+    deal_url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
+    deal_response = requests.get(deal_url, headers=headers)
+    deal_data = deal_response.json()
+    pipeline_id = deal_data['properties']['pipeline']  # Get the pipeline ID from the deal data
+    pipeline_url = f'https://api.hubapi.com/crm-pipelines/v1/pipelines/deals/{pipeline_id}'
+    pipeline_response = requests.get(pipeline_url, headers=headers)
+    pipeline_data = pipeline_response.json()
+    stage_mapping = {stage['stageId']: stage['label'] for stage in pipeline_data['stages']}
+    return stage_mapping
+
+def get_deal_stage_history(deals):
+    stage_mapping = get_stage_mapping()
+    for deal in deals:
+        time.sleep(0.1)
+        deal_id = deal['id']
+        # Define the API endpoint and parameters
+        url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
+        headers = {
+            "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        params = {
+            'propertiesWithHistory': 'dealstage',
+        }
+        # Make the request to HubSpot API
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            deal_stage_history = response.json()['propertiesWithHistory']['dealstage']
+            for stage in deal_stage_history:
+                stage_id = stage['value']
+                stage_name = stage_mapping[stage_id]
+                stage['stage_name'] = stage_name
+            deal["deal_stage_history"] = deal_stage_history
+                    # for i in response_parsed:
+                    #     print(f"{i['value']}--{i['timestamp']}--{i['sourceType']}")
+        else:
+            print(f"Failed to retrieve deal data: {response.status_code} {response.text}")
+    return deals
+
+
 def export_csv(start_date=None, end_date=None):
+    # columns -
+    #  - Round Size, Amount, Pre-Money, Deal type
     deals = fetch_deals(start_date=start_date, end_date=end_date)
     deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
     deals = fetch_and_attach_owner_details(deals, "team_member_1")
-    flattened_data = []
-    for deal in deals:
-        flattened_entry = deal['properties'].copy()
-        flattened_entry['id'] = deal['id']
-        flattened_entry['createdAt'] = deal['createdAt']
-        flattened_entry['updatedAt'] = deal['updatedAt']
-        flattened_entry['archived'] = deal['archived']
-        # Concatenate firstName and lastName for Lead Owner
-        if deal.get('hubspot_owner_id_details'):
-            lead_owner = deal.pop('hubspot_owner_id_details')
-            flattened_entry['Lead Owner Name'] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
-            flattened_entry['Lead Owner Email'] = lead_owner['email']
-        # Concatenate firstName and lastName for Support Member
-        if deal.get('team_member_1_details'):
-            support_member = deal.pop('team_member_1_details')
-            flattened_entry['Support Member Name'] = f"{support_member['firstName']} {support_member['lastName']}"
-            flattened_entry['Support Member Email'] = support_member['email']
-        flattened_data.append(flattened_entry)
+    deals = get_deal_stage_history(deals)
+
+flattened_data = []
+for deal in deals:
+    flattened_entry = deal['properties'].copy()
+    flattened_entry['id'] = deal['id']
+    flattened_entry['createdAt'] = deal['createdAt']
+    flattened_entry['updatedAt'] = deal['updatedAt']
+    flattened_entry['archived'] = deal['archived']
+    # Concatenate firstName and lastName for Lead Owner
+    if deal.get('hubspot_owner_id_details'):
+        lead_owner = deal.pop('hubspot_owner_id_details')
+        flattened_entry['Lead Owner Name'] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
+        flattened_entry['Lead Owner Email'] = lead_owner['email']
+    # Concatenate firstName and lastName for Support Member
+    if deal.get('team_member_1_details'):
+        support_member = deal.pop('team_member_1_details')
+        flattened_entry['Support Member Name'] = f"{support_member['firstName']} {support_member['lastName']}"
+        flattened_entry['Support Member Email'] = support_member['email']
+    if 'deal_stage_history' in deal and deal['deal_stage_history']:
+        for stage in deal['deal_stage_history']:
+            stage_name = stage.get('stage_name', 'Unknown Stage')
+            flattened_entry[f'{stage_name}_timestamp'] = stage.get('timestamp', '')
+            flattened_entry[f'{stage_name}_source_type'] = stage.get('sourceType', '')
+    else:
+        flattened_entry['Unknown Stage_timestamp'] = ''
+        flattened_entry['Unknown Stage_source_type'] = ''
+    flattened_data.append(flattened_entry)
 
     # Convert to DataFrame
-    df = pd.DataFrame(flattened_data)
+df = pd.DataFrame(flattened_data)
 
-    # Select only the necessary columns
-    columns_to_include = ['broad_category_updated', 'createdate', 'dealname', 'fund', 'keywords',
-           'pipeline', 'priority', 'referral_type', 'subcategory',
-           'id', 'createdAt', 'updatedAt', 'archived', 'Lead Owner Name',
-           'Lead Owner Email', 'Support Member Name', 'Support Member Email']
-    #
-    df = df[columns_to_include]
+# # Select only the necessary columns
+# columns_to_include = ['broad_category_updated', 'createdate', 'dealname', 'fund', 'keywords',
+#                       'pipeline', 'priority', 'referral_type', 'subcategory',
+#                       'id', 'createdAt', 'updatedAt', 'archived', 'Lead Owner Name',
+#                       'Lead Owner Email', 'Support Member Name', 'Support Member Email']
+# #
+# df = df[columns_to_include]
 
-    if start_date is None and end_date is None:
-        start_date = str(datetime.now().date() + relativedelta(months=-3))
-        end_date = str(datetime.now().date() + relativedelta(days=+1))
-    start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
-    end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
-    # Save to CSV
-    file_object = io.StringIO()
-    df.to_csv(file_object, index=False)
-    file_object.seek(0)
-    filename = f'Deal_Export--{start_date}-{end_date}.csv'
+# List of columns to exclude
+columns_to_exclude = ['hs_object_id', 'archived']
+
+# Drop the columns you want to exclude
+df = df.drop(columns=columns_to_exclude)
+
+if start_date is None and end_date is None:
+    start_date = str(datetime.now().date() + relativedelta(months=-3))
+    end_date = str(datetime.now().date() + relativedelta(days=+1))
+start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
+end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
+# Save to CSV
+file_object = io.StringIO()
+df.to_csv(file_object, index=False)
+file_object.seek(0)
+filename = f'Deal_Export--{start_date}-{end_date}.csv'
 
     return file_object, filename
+
+# def generate_keywords(start_date=None, end_date=None):
+#     deals = fetch_deals(start_date='2019-07-28', end_date='2024-07-28')
+#     deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+#     deals = fetch_and_attach_owner_details(deals, "team_member_1")
+#     deals = attach_notes(deals)
+#
+#     deals = attach_attachments(deals)
+#     deals = attach_engagements(deals)
+#
+#     batch = batch_with_chatgpt(openai_client, deals)
+#
+#
+# def orchestrator(context: df.DurableOrchestrationContext):
+#     deals = yield context.call_activity('FetchDeals', date_data: dict)
+#
+#     deals = yield context.call_activity('FetchAndAttachOwnerDetails', input)
+#
+#     deals = yield context.call_activity('FetchAndAttachOwnerDetails', input)
+#
+#     deals = yield context.call_activity('AttachNotes', deals)
+#
+#     deals = yield context.call_activity('AttachAttachments', deals)
+#
+#     batch = yield context.call_activity('BatchWithChatgpt', )

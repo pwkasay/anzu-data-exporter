@@ -3,5 +3,6 @@ We would like to replace the existing subcategories with new subcategories becau
 I want you to generate a new csv that lists only these items:
 1. Broad categories (using exactly the existing broad categories)
 2. New subcategories.
+
 I want you to generate the new subcategories yourself as a replacement for the existing subcategories.  To identify new subcategories, use the "recommendation" list as a reference as to what types of subcategories could be useful.  Then please generate exactly 10 subcategories per broad category.  The subcategories should be MECE (e.g., comprehensive and not overlapping).
 Please keep the response limited to json format similar to this: {"broad_category":["subcategory1","subcategory2"]}
