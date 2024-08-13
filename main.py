@@ -649,15 +649,36 @@ def update_hubspot_keywords(deal):
 
 
 def get_stage_mapping():
-    deal_url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
-    deal_response = requests.get(deal_url, headers=headers)
-    deal_data = deal_response.json()
-    pipeline_id = deal_data['properties']['pipeline']  # Get the pipeline ID from the deal data
-    pipeline_url = f'https://api.hubapi.com/crm-pipelines/v1/pipelines/deals/{pipeline_id}'
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    pipeline_url = f'https://api.hubapi.com/crm-pipelines/v1/pipelines/deals/default'
     pipeline_response = requests.get(pipeline_url, headers=headers)
     pipeline_data = pipeline_response.json()
+    # Create a mapping of stage IDs to stage labels
     stage_mapping = {stage['stageId']: stage['label'] for stage in pipeline_data['stages']}
+    # Store the mapping in the dictionary with the deal ID as the key
     return stage_mapping
+
+
+def get_deal_stage_name(stage_id, pipeline_id):
+    # Fetch the pipeline data using the pipeline ID
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    pipeline_url = f'https://api.hubapi.com/crm-pipelines/v1/pipelines/deals/{pipeline_id}'
+    pipeline_response = requests.get(pipeline_url, headers=headers)
+    if pipeline_response.status_code != 200:
+        raise Exception(f"Failed to fetch pipeline data: {pipeline_response.status_code} {pipeline_response.text}")
+    pipeline_data = pipeline_response.json()
+        # Search for the stage with the matching ID
+    for stage in pipeline_data['stages']:
+        print(stage)
+        if stage['stageId'] == stage_id:
+            return stage['label']
+
 
 def get_deal_stage_history(deals):
     stage_mapping = get_stage_mapping()
@@ -679,11 +700,14 @@ def get_deal_stage_history(deals):
             deal_stage_history = response.json()['propertiesWithHistory']['dealstage']
             for stage in deal_stage_history:
                 stage_id = stage['value']
-                stage_name = stage_mapping[stage_id]
-                stage['stage_name'] = stage_name
+                if stage_mapping.get(stage_id):
+                    stage_name = stage_mapping[stage_id]
+                    stage['stage_name'] = stage_name
+                else:
+                    stage.pop(stage_id, None)
             deal["deal_stage_history"] = deal_stage_history
-                    # for i in response_parsed:
-                    #     print(f"{i['value']}--{i['timestamp']}--{i['sourceType']}")
+                # for i in response_parsed:
+                #     print(f"{i['value']}--{i['timestamp']}--{i['sourceType']}")
         else:
             print(f"Failed to retrieve deal data: {response.status_code} {response.text}")
     return deals
