@@ -697,60 +697,60 @@ def export_csv(start_date=None, end_date=None):
     deals = fetch_and_attach_owner_details(deals, "team_member_1")
     deals = get_deal_stage_history(deals)
 
-flattened_data = []
-for deal in deals:
-    flattened_entry = deal['properties'].copy()
-    flattened_entry['id'] = deal['id']
-    flattened_entry['createdAt'] = deal['createdAt']
-    flattened_entry['updatedAt'] = deal['updatedAt']
-    flattened_entry['archived'] = deal['archived']
-    # Concatenate firstName and lastName for Lead Owner
-    if deal.get('hubspot_owner_id_details'):
-        lead_owner = deal.pop('hubspot_owner_id_details')
-        flattened_entry['Lead Owner Name'] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
-        flattened_entry['Lead Owner Email'] = lead_owner['email']
-    # Concatenate firstName and lastName for Support Member
-    if deal.get('team_member_1_details'):
-        support_member = deal.pop('team_member_1_details')
-        flattened_entry['Support Member Name'] = f"{support_member['firstName']} {support_member['lastName']}"
-        flattened_entry['Support Member Email'] = support_member['email']
-    if 'deal_stage_history' in deal and deal['deal_stage_history']:
-        for stage in deal['deal_stage_history']:
-            stage_name = stage.get('stage_name', 'Unknown Stage')
-            flattened_entry[f'{stage_name}_timestamp'] = stage.get('timestamp', '')
-            flattened_entry[f'{stage_name}_source_type'] = stage.get('sourceType', '')
-    else:
-        flattened_entry['Unknown Stage_timestamp'] = ''
-        flattened_entry['Unknown Stage_source_type'] = ''
-    flattened_data.append(flattened_entry)
+    flattened_data = []
+    for deal in deals:
+        flattened_entry = deal['properties'].copy()
+        flattened_entry['id'] = deal['id']
+        flattened_entry['createdAt'] = deal['createdAt']
+        flattened_entry['updatedAt'] = deal['updatedAt']
+        flattened_entry['archived'] = deal['archived']
+        # Concatenate firstName and lastName for Lead Owner
+        if deal.get('hubspot_owner_id_details'):
+            lead_owner = deal.pop('hubspot_owner_id_details')
+            flattened_entry['Lead Owner Name'] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
+            flattened_entry['Lead Owner Email'] = lead_owner['email']
+        # Concatenate firstName and lastName for Support Member
+        if deal.get('team_member_1_details'):
+            support_member = deal.pop('team_member_1_details')
+            flattened_entry['Support Member Name'] = f"{support_member['firstName']} {support_member['lastName']}"
+            flattened_entry['Support Member Email'] = support_member['email']
+        if 'deal_stage_history' in deal and deal['deal_stage_history']:
+            for stage in deal['deal_stage_history']:
+                stage_name = stage.get('stage_name', 'Unknown Stage')
+                flattened_entry[f'{stage_name}_timestamp'] = stage.get('timestamp', '')
+                flattened_entry[f'{stage_name}_source_type'] = stage.get('sourceType', '')
+        else:
+            flattened_entry['Unknown Stage_timestamp'] = ''
+            flattened_entry['Unknown Stage_source_type'] = ''
+        flattened_data.append(flattened_entry)
 
     # Convert to DataFrame
-df = pd.DataFrame(flattened_data)
+    df = pd.DataFrame(flattened_data)
 
-# # Select only the necessary columns
-# columns_to_include = ['broad_category_updated', 'createdate', 'dealname', 'fund', 'keywords',
-#                       'pipeline', 'priority', 'referral_type', 'subcategory',
-#                       'id', 'createdAt', 'updatedAt', 'archived', 'Lead Owner Name',
-#                       'Lead Owner Email', 'Support Member Name', 'Support Member Email']
-# #
-# df = df[columns_to_include]
+    # # Select only the necessary columns
+    # columns_to_include = ['broad_category_updated', 'createdate', 'dealname', 'fund', 'keywords',
+    #                       'pipeline', 'priority', 'referral_type', 'subcategory',
+    #                       'id', 'createdAt', 'updatedAt', 'archived', 'Lead Owner Name',
+    #                       'Lead Owner Email', 'Support Member Name', 'Support Member Email']
+    # #
+    # df = df[columns_to_include]
 
-# List of columns to exclude
-columns_to_exclude = ['hs_object_id', 'archived']
+    # List of columns to exclude
+    columns_to_exclude = ['hs_object_id', 'archived']
 
-# Drop the columns you want to exclude
-df = df.drop(columns=columns_to_exclude)
+    # Drop the columns you want to exclude
+    df = df.drop(columns=columns_to_exclude)
 
-if start_date is None and end_date is None:
-    start_date = str(datetime.now().date() + relativedelta(months=-3))
-    end_date = str(datetime.now().date() + relativedelta(days=+1))
-start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
-end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
-# Save to CSV
-file_object = io.StringIO()
-df.to_csv(file_object, index=False)
-file_object.seek(0)
-filename = f'Deal_Export--{start_date}-{end_date}.csv'
+    if start_date is None and end_date is None:
+        start_date = str(datetime.now().date() + relativedelta(months=-3))
+        end_date = str(datetime.now().date() + relativedelta(days=+1))
+    start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
+    end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
+    # Save to CSV
+    file_object = io.StringIO()
+    df.to_csv(file_object, index=False)
+    file_object.seek(0)
+    filename = f'Deal_Export--{start_date}-{end_date}.csv'
 
     return file_object, filename
 
