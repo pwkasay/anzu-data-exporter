@@ -17,15 +17,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # Generate the CSV in-memory
     try:
-        result = generate_keywords()
-        # return func.HttpResponse(result, status_code=200)
-        if result.status_code == 200:
-            return func.HttpResponse(f"Main 1 - Processed - {result.status_code}", status_code=200)
-        elif result.status_code == 500:
-            return func.HttpResponse(f"Main 0 Failed to Process - {result.get_body()} -{result.status_code}",
-                                     status_code=500)
-        else:
-            return func.HttpResponse("Main 0 Failed to Process - ")
+        csv_output, filename = export_csv(start_date, end_date)
+        # Return the CSV as an HTTP response with the appropriate headers
+        return func.HttpResponse(
+            csv_output.getvalue(),
+            mimetype="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
