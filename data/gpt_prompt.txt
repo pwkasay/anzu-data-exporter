@@ -14,6 +14,7 @@ Please create new subcategories, you don't have to conform to the provided subca
 The current options for Broad Category are these:
 Broad Category (options are Agricultural Technology, Consumer, Electronics, Energy & Clean Technology, Life Sciences & Healthcare, Manufacturing, Materials & Chemicals, Software & Advanced Computing, Transportation/ & Logistics, Other)
 
+
 The current options for Subcategory are these:
 Subcategory (options listed below:)
 Agricultural Technology - Production tools, Systems, etc.
