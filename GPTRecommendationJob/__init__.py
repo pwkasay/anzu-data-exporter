@@ -52,6 +52,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             check = check_gpt(openai_client, batch)
             if check:
                 results = poll_gpt_check(check)
+                print("Results returned")
             else:
                 time.sleep(20)
     except Exception as e:
