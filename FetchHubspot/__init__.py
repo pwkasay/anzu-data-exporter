@@ -31,14 +31,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(str(e), status_code=500)
     try:
         deals = attach_attachments(deals)
+        json_response = json.dumps(deals)
+        return func.HttpResponse(json_response, status_code=200)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = attach_engagements(deals)
-        return func.HttpResponse(deals, status_code=200)
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+    # try:
+    #     deals = attach_engagements(deals)
+    #     return func.HttpResponse(deals, status_code=200)
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
 
 
