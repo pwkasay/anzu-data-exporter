@@ -10,7 +10,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     end_date = req.params.get('end_date', None)
 
     try:
-        deals = fetch_deals(start_date='2024-08-05', end_date='2024-08-13')
+        deals = fetch_deals(start_date=start_date, end_date=end_date)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
@@ -40,22 +40,20 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
 
-    # this returns a batch object that has a status of in-progress or complete along with other options
     try:
         batch = batch_with_chatgpt(openai_client, deals)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-    # I need to check the status of the batch repeatedly until it returns completely
 
     try:
         results = None
-        check = check_gpt(openai_client, batch)
         while not results:
+            check = check_gpt(openai_client, batch)
             if check:
                 results = poll_gpt_check(check)
             else:
-                sleep(20)
+                time.sleep(20)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)

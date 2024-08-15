@@ -39,11 +39,11 @@ def get_secrets():
         raise
 
 
-# from dotenv import load_dotenv
-#
-# mode = "dev"
-# if mode == "dev":
-#     load_dotenv()
+from dotenv import load_dotenv
+
+mode = "dev"
+if mode == "dev":
+    load_dotenv()
 
 (
     CLIENT_ID,
@@ -496,12 +496,15 @@ def batch_with_chatgpt(openai_client, deals):
                 "temperature": 0.5
             }
         }
-        jsonl_lines.append(json.dumps(prompt))
-    with open('deals_prompts.jsonl', 'w') as f:
-        for line in jsonl_lines:
-            f.write(line + '\n')
+        jsonl_lines.append(json.dumps(prompt).encode('utf-8'))
+
+    json_memory_file = io.BytesIO()
+    for line in jsonl_lines:
+        json_memory_file.write(line + b'\n')
+
+    json_memory_file.seek(0)
     batch_input_file = openai_client.files.create(
-        file=open("deals_prompts.jsonl", "rb"),
+        file=json_memory_file,
         purpose="batch"
     )
     batch_input_file_id = batch_input_file.id
@@ -525,9 +528,9 @@ def check_gpt(openai_client, batch):
         return file_response.content
     elif retrieved_batch.status == "completed" and retrieved_batch.error_file_id:
         file_response = openai_client.files.content(retrieved_batch.error_file_id)
-        return file_response.content
+        raise Exception(f"Batch processing failed. Error details: {file_response.content}")
     else:
-        return retrieved_batch.status
+        return None
 
 def poll_gpt_check(check):
     if isinstance(check, bytes):
