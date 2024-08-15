@@ -54,7 +54,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 results = poll_gpt_check(check)
                 print("Results returned")
             else:
-                time.sleep(20)
+                time.sleep(5)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
