@@ -24,11 +24,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-    # try:
-    #     deals = attach_notes(deals)
-    # except Exception as e:
-    #     logging.error(f"Main exception found: {e}")
-    #     return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = attach_notes(deals)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
     try:
         deals = attach_attachments(deals)
     except Exception as e:
