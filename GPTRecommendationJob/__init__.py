@@ -24,11 +24,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = attach_notes(deals)
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+    # try:
+    #     deals = attach_notes(deals)
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
     try:
         deals = attach_attachments(deals)
     except Exception as e:
@@ -54,7 +54,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 results = poll_gpt_check(check)
                 print("Results returned")
             else:
-                time.sleep(5)
+                time.sleep(4)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)

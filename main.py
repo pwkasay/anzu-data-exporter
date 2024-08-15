@@ -276,7 +276,7 @@ def fetch_engagements(deal_id, engagement_type="EMAIL"):
 
 def attach_engagements(deals):
     for deal in deals:
-        time.sleep(0.5)
+        time.sleep(0.1)
         deal_id = deal['id']
         engagements = fetch_engagements(deal_id)
         deal['engagements'] = engagements
