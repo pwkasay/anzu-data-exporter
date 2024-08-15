@@ -39,11 +39,11 @@ def get_secrets():
         raise
 
 
-from dotenv import load_dotenv
-
-mode = "dev"
-if mode == "dev":
-    load_dotenv()
+# from dotenv import load_dotenv
+#
+# mode = "dev"
+# if mode == "dev":
+#     load_dotenv()
 
 (
     CLIENT_ID,
@@ -242,7 +242,6 @@ def attach_attachments(deals):
                 if note['properties']['hs_attachment_ids']:
                     file_id = note['properties']['hs_attachment_ids']
                     # time.sleep(0.4)
-                    print("file_id", file_id)
                     try:
                         attachment = fetch_attachment(file_id)
                         deal['attachments'] = attachment
@@ -530,6 +529,19 @@ def check_gpt(openai_client, batch):
     else:
         return retrieved_batch.status
 
+def poll_gpt_check(check):
+    if isinstance(check, bytes):
+        result = check
+        memory_file = io.BytesIO()
+        memory_file.write(result)
+        memory_file.seek(0)
+        memory_text = io.StringIO(memory_file.getvalue().decode('utf-8'))
+        results = []
+        # Read from the in-memory text stream
+        for line in memory_text:
+            json_object = json.loads(line.strip())
+            results.append(json_object)
+        return results
 
 def delete_batch_file(openai_client, batch):
     # finish delete file
@@ -543,6 +555,9 @@ def delete_batch_file(openai_client, batch):
 
 # for file in files:
 #     openai_client.files.delete(file.id)
+
+
+
 
 def compile_with_chatgpt(openai_client, cleaned_deals):
     try:

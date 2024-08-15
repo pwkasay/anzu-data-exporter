@@ -6,7 +6,7 @@ Broad Category (broad_category_updated),
 Subcategory (subcategory),
 Fund (fund),
 Created Date (createdate)
-Recommendation (You will provide this column as an array of three suggested subcategories)
+Recommendation (You will provide this column as an array of five suggested subcategories)
 Use the Deals in the data provided to infer every column.
 For the Recommendation column please read the attachments, notes, and engagements in the deal data to suggest three subcategories that seem to best fit the information provided.
 Please create new subcategories, you don't have to conform to the provided subcategories.
@@ -104,5 +104,5 @@ Optics-enabled Industrial Instrumentation & Tools
 Optics-enabled Life Science Instrumentation & Tools
 
 Use these to help yourself understand the type and style of data being processed, but again, please create new subcategories that best fit the information you are parsing. You do not have to use the provided subcategories.
-Additionally, you do not have to include any explanation text on why you chose the three subcategories. Simply returning a json object with the field specified is enough. And when you return the json you don't have to include the Broad Category in your recommendation, in other words. You don't have to append the Broad Category to the Sub category with hyphens like Life Sciences & Healthcare - Immunology, you can just provide the suggested sub category.
+Additionally, you do not have to include any explanation text on why you chose the five subcategories. Simply returning a json object with the field specified is enough. And when you return the json you don't have to include the Broad Category in your recommendation, in other words. You don't have to append the Broad Category to the Sub category with hyphens like Life Sciences & Healthcare - Immunology, you can just provide the suggested sub category.
  Thank you.
