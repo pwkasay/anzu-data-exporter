@@ -1,31 +1,81 @@
-# from main import *
-# import azure.functions as func
-# import logging
-#
-#
-# def main(req: func.HttpRequest) -> func.HttpResponse:
-#     logging.info('Python HTTP trigger function processed a request.')
-#     print("Main triggered")
-#     # If not parameters given - run for 3 months
-#     # If parameters given - accept
-#     # Add flags to email out csvs at the two steps or not
-#     # Initial csv
-#     # Final csv
-#
-#     start_date = req.params.get('start_date', None)
-#     end_date = req.params.get('end_date', None)
-#
-#     # Generate the CSV in-memory
-#     try:
-#         csv_output, filename = export_csv(start_date, end_date)
-#         # Return the CSV as an HTTP response with the appropriate headers
-#         return func.HttpResponse(
-#             csv_output.getvalue(),
-#             mimetype="text/csv",
-#             headers={
-#                 "Content-Disposition": f"attachment; filename={filename}"
-#             }
-#         )
-#     except Exception as e:
-#         logging.error(f"Main exception found: {e}")
-#         return func.HttpResponse(str(e), status_code=500)
+from main import *
+import azure.functions as func
+import logging
+
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+    print("Main triggered")
+    start_date = req.params.get('start_date', None)
+    end_date = req.params.get('end_date', None)
+
+    try:
+        deals = fetch_deals(start_date='2024-08-05', end_date='2024-08-13')
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = fetch_and_attach_owner_details(deals, "team_member_1")
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = attach_notes(deals)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = attach_attachments(deals)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = attach_engagements(deals)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+
+    # this returns a batch object that has a status of in-progress or complete along with other options
+    try:
+        batch = batch_with_chatgpt(openai_client, deals)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+    # I need to check the status of the batch repeatedly until it returns completely
+
+    try:
+        results = None
+        check = check_gpt(openai_client, batch)
+        while not results:
+            if check:
+                results = poll_gpt_check(check)
+            else:
+                sleep(20)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+
+    try:
+        for deal in deals:
+            for result in results:
+                deal_data = json.loads(result['response']['body']['choices'][0]['message']['content'])
+                deal_name = deal_data['dealname']
+                if deal['properties']['dealname'] == deal_name:
+                    deal['parsed'] = deal_data
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+
+    try:
+        for deal in deals:
+            update_hubspot_keywords(deal)
+        return func.HttpResponse(f"Main 1 - Processed ", status_code=200)
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+
