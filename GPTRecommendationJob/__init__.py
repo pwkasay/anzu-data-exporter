@@ -73,7 +73,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
         for deal in deals:
             update_hubspot_keywords(deal)
-        return func.HttpResponse(f"Main 1 - Processed ", status_code=200)
+            return func.HttpResponse(f"Main 1 - Processed ", status_code=200)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
