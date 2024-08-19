@@ -874,7 +874,7 @@ def export_csv(start_date=None, end_date=None):
     # Convert to DataFrame
     df = pd.DataFrame(flattened_data)
     # List of columns to exclude
-    columns_to_exclude = ["hs_object_id", "archived"]
+    columns_to_exclude = ["hs_object_id", "archived", "hs_lastmodifieddate", "hubspot_owner_id", "pipeline", "team_member_1", "id", "createdAt", "updatedAt", "Lead Owner Email", "Support Member Email"]
     # Drop the columns you want to exclude
     df = df.drop(columns=columns_to_exclude)
     if start_date is None and end_date is None:
@@ -887,6 +887,7 @@ def export_csv(start_date=None, end_date=None):
     df.to_csv(file_object, index=False)
     file_object.seek(0)
     filename = f"Deal_Export--{start_date}-{end_date}.csv"
+    # df.to_csv("test.csv", index=False)
     return file_object, filename
 
 
