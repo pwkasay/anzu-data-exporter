@@ -41,11 +41,11 @@ def get_secrets():
         raise
 
 
-from dotenv import load_dotenv
-
-mode = "dev"
-if mode == "dev":
-    load_dotenv()
+# from dotenv import load_dotenv
+#
+# mode = "dev"
+# if mode == "dev":
+#     load_dotenv()
 
 (
     CLIENT_ID,
@@ -186,7 +186,7 @@ def batch_fetch_notes(deal_ids):
 def batch_attach_notes(deals, batch_size=3):
     deal_ids = [deal["id"] for deal in deals]
     for i in range(0, len(deal_ids), batch_size):
-        batch_ids = deal_ids[i : i + batch_size]
+        batch_ids = deal_ids[i: i + batch_size]
         notes = batch_fetch_notes(batch_ids)
         # Organize notes by deal ID
         notes_by_deal = {}
@@ -360,6 +360,18 @@ def fetch_engagements(deal_id, engagement_type="EMAIL"):
     return engagements
 
 
+def fetch_deal_properties():
+    properties_url = 'https://api.hubapi.com/properties/v1/deals/properties/'
+    headers = {
+        'Authorization': f'Bearer {HUBSPOT_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    # Fetch all deal properties
+    response = requests.get(properties_url, headers=headers)
+    return response.json()
+
+
+
 def attach_engagements(deals):
     for deal in deals:
         time.sleep(0.1)
@@ -367,6 +379,66 @@ def attach_engagements(deals):
         engagements = fetch_engagements(deal_id)
         deal["engagements"] = engagements
     return deals
+
+
+def fetch_single_deal_with_history(deal_id):
+    properties_url = 'https://api.hubapi.com/properties/v2/deals/properties'
+    headers = {
+        'Authorization': f'Bearer {HUBSPOT_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    # Fetch all deal properties
+    response = requests.get(properties_url, headers=headers)
+    if response.status_code == 200:
+        deal_properties = response.json()
+        all_properties = [prop['name'] for prop in deal_properties]
+        # HubSpot API endpoint for fetching a single deal with property history
+        deal_url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
+        params = {
+            'propertiesWithHistory': ','.join(all_properties)  # Fetch all properties with their history
+        }
+        deal_response = requests.get(deal_url, headers=headers, params=params)
+        if deal_response.status_code == 200:
+            deal_info = deal_response.json()
+            print(deal_info)
+        else:
+            print(f'Error: {deal_response.status_code}')
+            print(deal_response.text)
+    else:
+        print(f'Error: {response.status_code}')
+        print(response.text)
+
+
+def fetch_single_deal(deal_id):
+    properties_url = 'https://api.hubapi.com/properties/v2/deals/properties'
+    url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    params = {
+        'properties': [
+            'dealname', 'amount', 'dealstage', 'pipeline',
+            'closedate', 'createdate', 'hubspot_owner_id', 'fund'
+        ]
+    }
+    properties_response = requests.get(properties_url, headers=headers)
+    if properties_response.status_code == 200:
+        deal_properties = properties_response.json()
+        all_properties = [prop['name'] for prop in deal_properties]
+        print(all_properties)
+    else:
+        print(f'Error: {properties_response.status_code}')
+        print(properties_response.text)
+    # Make the GET request to fetch the deal information
+    response = requests.get(url, headers=headers, params=params)
+    # Check if the request was successful
+    if response.status_code == 200:
+        deal_info = response.json()
+        print(deal_info)
+    else:
+        print(f'Error: {response.status_code}')
+        print(response.text)
 
 
 def fetch_deals(start_date=None, end_date=None):
@@ -433,7 +505,7 @@ def fetch_deals(start_date=None, end_date=None):
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    delay = base_delay * (attempt**2)
+                    delay = base_delay * (attempt ** 2)
                     time.sleep(delay)
                 else:
                     print(f"Attempt {attempt + 1} failed: {e}. No more retries left.")
@@ -815,13 +887,26 @@ def export_csv(start_date=None, end_date=None):
     deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
     deals = fetch_and_attach_owner_details(deals, "team_member_1")
     deals = get_deal_stage_history(deals)
+    fetched_deal_properties = fetch_deal_properties()
+    fund = None
+    fund_mapping = {}
+    for p in fetched_deal_properties:
+        if p['name'] == 'fund':
+            fund = p
+            options = fund['options']
+            for option in options:
+                fund_mapping[option['value']] = option['label']
     flattened_data = []
     for deal in deals:
         flattened_entry = deal["properties"].copy()
+        print("flattened_entry---", flattened_entry)
         flattened_entry["id"] = deal["id"]
         flattened_entry["createdAt"] = deal["createdAt"]
         flattened_entry["updatedAt"] = deal["updatedAt"]
         flattened_entry["archived"] = deal["archived"]
+        if "fund" in flattened_entry and flattened_entry["fund"]:
+            mapped_fund = fund_mapping[flattened_entry["fund"]]
+            flattened_entry["fund"] = mapped_fund
         # Concatenate firstName and lastName for Lead Owner
         if deal.get("hubspot_owner_id_details"):
             lead_owner = deal.pop("hubspot_owner_id_details")
@@ -874,7 +959,8 @@ def export_csv(start_date=None, end_date=None):
     # Convert to DataFrame
     df = pd.DataFrame(flattened_data)
     # List of columns to exclude
-    columns_to_exclude = ["hs_object_id", "archived", "hs_lastmodifieddate", "hubspot_owner_id", "pipeline", "team_member_1", "id", "createdAt", "updatedAt", "Lead Owner Email", "Support Member Email"]
+    columns_to_exclude = ["hs_object_id", "archived", "hs_lastmodifieddate", "hubspot_owner_id", "pipeline",
+                          "team_member_1", "id", "createdAt", "updatedAt", "Lead Owner Email", "Support Member Email"]
     # Drop the columns you want to exclude
     df = df.drop(columns=columns_to_exclude)
     if start_date is None and end_date is None:
@@ -889,7 +975,6 @@ def export_csv(start_date=None, end_date=None):
     filename = f"Deal_Export--{start_date}-{end_date}.csv"
     # df.to_csv("test.csv", index=False)
     return file_object, filename
-
 
 # def generate_keywords(start_date=None, end_date=None):
 #     deals = fetch_deals(start_date='2019-07-28', end_date='2024-07-28')
