@@ -887,7 +887,6 @@ def export_csv(start_date=None, end_date=None):
     df.to_csv(file_object, index=False)
     file_object.seek(0)
     filename = f"Deal_Export--{start_date}-{end_date}.csv"
-    df.to_csv("test.csv", index=False)
     return file_object, filename
 
 
