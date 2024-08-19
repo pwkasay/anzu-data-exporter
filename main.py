@@ -598,7 +598,7 @@ def fetch_all_deals(start_date=None, end_date=None):
         end_date = str(datetime.now().date() + relativedelta(days=+1))
     start_date = datetime.strptime(start_date, "%Y-%m-%d")
     end_date = datetime.strptime(end_date, "%Y-%m-%d")
-    # Hubspot needs datetime to be set to midnight
+    # HubSpot needs datetime to be set to midnight
     start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
     end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
     # Convert the close date to a Unix timestamp in milliseconds
@@ -610,6 +610,8 @@ def fetch_all_deals(start_date=None, end_date=None):
     ]
     deals = []
     after = None
+    max_retries = 5
+    backoff_time = 2  # Initial backoff time in seconds
     while True:
         # Batch fetch deals with pagination handling
         search_body = {
@@ -627,15 +629,29 @@ def fetch_all_deals(start_date=None, end_date=None):
         }
         if after:
             search_body["after"] = after
-        # Implement the search_hubspot_object method to fetch deals
-        search_results = search_hubspot_object("deals", search_body)
-        fetched_deals = search_results.get("results", [])
-        deals.extend(fetched_deals)
-        # Check if there is more data to fetch
-        pagination = search_results.get("paging")
-        if pagination and "next" in pagination:
-            after = pagination["next"]["after"]
+        for attempt in range(max_retries):
+            try:
+                # Implement the search_hubspot_object method to fetch deals
+                search_results = search_hubspot_object("deals", search_body)
+                fetched_deals = search_results.get("results", [])
+                deals.extend(fetched_deals)
+                # Check if there is more data to fetch
+                pagination = search_results.get("paging")
+                if pagination and "next" in pagination:
+                    after = pagination["next"]["after"]
+                else:
+                    return deals  # Exit loop if all data has been fetched
+
+                break  # Exit retry loop if the request was successful
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:  # Rate limit error
+                    print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
+                    time.sleep(backoff_time)
+                    backoff_time *= 2  # Exponentially increase backoff time
+                else:
+                    raise  # Re-raise the exception if it's not a rate limit error
         else:
+            print(f"Max retries reached for fetching deals.")
             break
     return deals
 
