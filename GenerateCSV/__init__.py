@@ -12,8 +12,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     # Initial csv
     # Final csv
 #
-# start_date = '2024-07-01'
-# end_date = '2024-08-10'
+# start_date = '2024-08-01'
+# end_date = '2024-08-14'
 
     start_date = req.params.get('start_date', None)
     end_date = req.params.get('end_date', None)

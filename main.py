@@ -868,26 +868,27 @@ def export_csv(start_date=None, end_date=None):
                     stage_durations[last_stage_name] += last_duration
                 else:
                     stage_durations[last_stage_name] = last_duration
-            for stage_name, duration in stage_durations.items():
-                flattened_entry[f"{stage_name}_days_in_stage"] = duration
+        for stage_name, duration in stage_durations.items():
+            flattened_entry[f"{stage_name}_days_in_stage"] = duration
             flattened_data.append(flattened_entry)
-        # Convert to DataFrame
-        df = pd.DataFrame(flattened_data)
-        # List of columns to exclude
-        columns_to_exclude = ["hs_object_id", "archived"]
-        # Drop the columns you want to exclude
-        df = df.drop(columns=columns_to_exclude)
-        if start_date is None and end_date is None:
-            start_date = str(datetime.now().date() + relativedelta(months=-3))
-            end_date = str(datetime.now().date() + relativedelta(days=+1))
-        start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
-        end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
-        # Save to CSV
-        file_object = io.StringIO()
-        df.to_csv(file_object, index=False)
-        file_object.seek(0)
-        filename = f"Deal_Export--{start_date}-{end_date}.csv"
-        return file_object, filename
+    # Convert to DataFrame
+    df = pd.DataFrame(flattened_data)
+    # List of columns to exclude
+    columns_to_exclude = ["hs_object_id", "archived"]
+    # Drop the columns you want to exclude
+    df = df.drop(columns=columns_to_exclude)
+    if start_date is None and end_date is None:
+        start_date = str(datetime.now().date() + relativedelta(months=-3))
+        end_date = str(datetime.now().date() + relativedelta(days=+1))
+    start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
+    end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
+    # Save to CSV
+    file_object = io.StringIO()
+    df.to_csv(file_object, index=False)
+    file_object.seek(0)
+    filename = f"Deal_Export--{start_date}-{end_date}.csv"
+    df.to_csv("test.csv", index=False)
+    return file_object, filename
 
 
 # def generate_keywords(start_date=None, end_date=None):
