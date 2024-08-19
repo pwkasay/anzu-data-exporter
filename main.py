@@ -2,21 +2,24 @@ import io
 import json
 import logging
 import os
+import ssl
 import time
 from datetime import datetime, timezone
 from io import BytesIO
+import aiohttp
+import asyncio
 
 import PyPDF2
+import certifi
 import docx
 import openai
 import pandas as pd
 import requests
+from dateutil import parser
 from dateutil.relativedelta import relativedelta
 from pptx import Presentation
 
 import uuid
-
-import azure.durable_functions as df
 
 
 def get_secrets():
@@ -439,6 +442,219 @@ def fetch_single_deal(deal_id):
     else:
         print(f'Error: {response.status_code}')
         print(response.text)
+
+
+def fetch_deals_with_stage_history(start_date=None, end_date=None):
+    properties = [
+        "dealname",
+        "priority",
+        "referral_type",
+        "pipeline",
+        "broad_category_updated",
+        "subcategory",
+        "fund",
+        "hubspot_owner_id",
+        "team_member_1",
+        "createdate",
+        "keywords",
+    ]
+    deals = []
+    # Set default dates if none are provided
+    if start_date is None and end_date is None:
+        start_date = str(datetime.now().date() + relativedelta(months=-3))
+        end_date = str(datetime.now().date() + relativedelta(days=+1))
+    start_date = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date = datetime.strptime(end_date, "%Y-%m-%d")
+    # Set to midnight
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Convert to Unix timestamp in milliseconds
+    start_date = int(start_date.timestamp() * 1000)
+    end_date = int(end_date.timestamp() * 1000)
+    after = None
+    max_retries = 3
+    base_delay = 0.5
+    # Fetch the stage mapping once
+    stage_mapping = get_stage_mapping()
+    while True:
+        search_body = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {
+                            "propertyName": "createdate",
+                            "operator": "BETWEEN",
+                            "highValue": end_date,
+                            "value": start_date,
+                        },
+                        {
+                            "propertyName": "pipeline",
+                            "operator": "EQ",
+                            "value": "default",
+                        },
+                    ]
+                }
+            ],
+            "properties": properties,
+            "limit": 100,
+        }
+        if after:
+            search_body["after"] = after
+        for attempt in range(max_retries):
+            try:
+                search_results = search_hubspot_object("deals", search_body)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (attempt ** 2)
+                    time.sleep(delay)
+                else:
+                    print(f"Attempt {attempt + 1} failed: {e}. No more retries left.")
+                    raise
+        # Process each deal to fetch its stage history
+        for deal in search_results.get("results", []):
+            deal_id = deal["id"]
+            url = f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
+            headers = {
+                "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            params = {
+                "propertiesWithHistory": "dealstage",
+            }
+            # Make the request to HubSpot API
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 200:
+                deal_stage_history = response.json()["propertiesWithHistory"]["dealstage"]
+                for stage in deal_stage_history:
+                    stage_id = stage["value"]
+                    if stage_mapping.get(stage_id):
+                        stage_name = stage_mapping[stage_id]
+                        stage["stage_name"] = stage_name
+                    else:
+                        stage.pop(stage_id, None)
+                deal["deal_stage_history"] = deal_stage_history
+            else:
+                print(f"Failed to retrieve deal data: {response.status_code} {response.text}")
+            deals.append(deal)
+        pagination = search_results.get("paging", [])
+        if pagination and "next" in pagination:
+            after = pagination["next"]["after"]
+        else:
+            break
+    return deals
+
+
+
+
+async def fetch_stage_history(session, deal_id, stage_mapping):
+    url = f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    params = {"propertiesWithHistory": "dealstage"}
+    max_retries = 5
+    backoff_time = 2  # Initial backoff time in seconds
+    for attempt in range(max_retries):
+        async with session.get(url, headers=headers, params=params) as response:
+            if response.status == 200:
+                deal_stage_history = await response.json()
+                deal_stage_history = deal_stage_history["propertiesWithHistory"]["dealstage"]
+                for stage in deal_stage_history:
+                    stage_id = stage["value"]
+                    stage["stage_name"] = stage_mapping.get(stage_id, "Unknown Stage")
+                return deal_id, deal_stage_history
+            elif response.status == 429:  # Rate limit error
+                print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
+                await asyncio.sleep(backoff_time)
+                backoff_time *= 2  # Exponentially increase backoff time
+            else:
+                print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
+                return deal_id, None
+    print(f"Max retries reached for deal {deal_id}.")
+    return deal_id, None
+
+
+async def fetch_all_stage_histories(deals, stage_mapping, batch_size=140, delay_between_batches=10):
+    sslcontext = ssl.create_default_context(cafile=certifi.where())
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+        stage_histories = {}
+        for i in range(0, len(deals), batch_size):
+            batch = deals[i:i + batch_size]
+            tasks = [fetch_stage_history(session, deal["id"], stage_mapping) for deal in batch]
+            results = await asyncio.gather(*tasks)
+            stage_histories.update({deal_id: history for deal_id, history in results if history})
+            # Delay between batches to avoid hitting rate limits
+            print(
+                f"Completed batch {i // batch_size + 1}, waiting {delay_between_batches} seconds before next batch...")
+            await asyncio.sleep(delay_between_batches)
+        return stage_histories
+
+
+def fetch_all_deals(start_date=None, end_date=None):
+    if start_date is None and end_date is None:
+        start_date = str(datetime.now().date() + relativedelta(months=-3))
+        end_date = str(datetime.now().date() + relativedelta(days=+1))
+    start_date = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date = datetime.strptime(end_date, "%Y-%m-%d")
+    # Hubspot needs datetime to be set to midnight
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Convert the close date to a Unix timestamp in milliseconds
+    start_date = int(start_date.timestamp() * 1000)
+    end_date = int(end_date.timestamp() * 1000)
+    properties = [
+        "dealname", "priority", "referral_type", "pipeline", "broad_category_updated",
+        "subcategory", "fund", "hubspot_owner_id", "team_member_1", "createdate", "keywords",
+    ]
+    deals = []
+    after = None
+    while True:
+        # Batch fetch deals with pagination handling
+        search_body = {
+            "filterGroups": [
+                {
+                    "filters": [
+                        {"propertyName": "createdate", "operator": "BETWEEN", "highValue": end_date,
+                         "value": start_date},
+                        {"propertyName": "pipeline", "operator": "EQ", "value": "default"},
+                    ]
+                }
+            ],
+            "properties": properties,
+            "limit": 100,
+        }
+        if after:
+            search_body["after"] = after
+        # Implement the search_hubspot_object method to fetch deals
+        search_results = search_hubspot_object("deals", search_body)
+        fetched_deals = search_results.get("results", [])
+        deals.extend(fetched_deals)
+        # Check if there is more data to fetch
+        pagination = search_results.get("paging")
+        if pagination and "next" in pagination:
+            after = pagination["next"]["after"]
+        else:
+            break
+    return deals
+
+def fetch_deals_and_stage_histories(start_date=None, end_date=None):
+    deals = fetch_all_deals(start_date, end_date)
+    deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+    deals = fetch_and_attach_owner_details(deals, "team_member_1")
+    # Fetch all stage histories asynchronously with batching and delays
+    stage_mapping = get_stage_mapping()
+    stage_histories = asyncio.run(fetch_all_stage_histories(deals, stage_mapping))
+    # Merge the stage histories into the deals
+    for deal in deals:
+        deal_id = deal["id"]
+        deal["deal_stage_history"] = stage_histories.get(deal_id, [])
+    return deals
+
+# Example usage:
+# start_date and end_date need to be in Unix timestamp format in milliseconds
+# deals_with_history = fetch_deals_and_stage_histories(start_date, end_date)
 
 
 def fetch_deals(start_date=None, end_date=None):
@@ -883,10 +1099,11 @@ def get_deal_stage_history(deals):
 
 
 def export_csv(start_date=None, end_date=None):
-    deals = fetch_deals(start_date=start_date, end_date=end_date)
-    deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
-    deals = fetch_and_attach_owner_details(deals, "team_member_1")
-    deals = get_deal_stage_history(deals)
+# deals = fetch_deals(start_date=start_date, end_date=end_date)
+# deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+# deals = fetch_and_attach_owner_details(deals, "team_member_1")
+# deals = get_deal_stage_history(deals)
+    deals = fetch_deals_and_stage_histories(start_date, end_date)
     fetched_deal_properties = fetch_deal_properties()
     fund = None
     fund_mapping = {}
@@ -899,7 +1116,6 @@ def export_csv(start_date=None, end_date=None):
     flattened_data = []
     for deal in deals:
         flattened_entry = deal["properties"].copy()
-        print("flattened_entry---", flattened_entry)
         flattened_entry["id"] = deal["id"]
         flattened_entry["createdAt"] = deal["createdAt"]
         flattened_entry["updatedAt"] = deal["updatedAt"]
@@ -909,18 +1125,20 @@ def export_csv(start_date=None, end_date=None):
             flattened_entry["fund"] = mapped_fund
         # Concatenate firstName and lastName for Lead Owner
         if deal.get("hubspot_owner_id_details"):
-            lead_owner = deal.pop("hubspot_owner_id_details")
-            flattened_entry[
-                "Lead Owner Name"
-            ] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
+            lead_owner = deal.get("hubspot_owner_id_details")
+            flattened_entry["Lead Owner Name"] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
             flattened_entry["Lead Owner Email"] = lead_owner["email"]
+        else:
+            flattened_entry["Lead Owner Name"] = ""
+            flattened_entry["Lead Owner Email"] = ""
         # Concatenate firstName and lastName for Support Member
         if deal.get("team_member_1_details"):
-            support_member = deal.pop("team_member_1_details")
-            flattened_entry[
-                "Support Member Name"
-            ] = f"{support_member['firstName']} {support_member['lastName']}"
+            support_member = deal.get("team_member_1_details")
+            flattened_entry["Support Member Name"] = f"{support_member['firstName']} {support_member['lastName']}"
             flattened_entry["Support Member Email"] = support_member["email"]
+        else:
+            flattened_entry["Support Member Name"] = ""
+            flattened_entry["Support Member Email"] = ""
         # Calculate time spent in each stage
         stage_durations = {}
         if "deal_stage_history" in deal and deal["deal_stage_history"]:
@@ -929,11 +1147,9 @@ def export_csv(start_date=None, end_date=None):
             for i in range(len(stages) - 1):
                 stage_name = stages[i].get("stage_name", "Unknown Stage")
                 entry_timestamp = stages[i].get("timestamp")
-                entry_time = datetime.strptime(
-                    entry_timestamp, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                entry_time = parser.parse(entry_timestamp)
                 exit_timestamp = stages[i + 1].get("timestamp")
-                exit_time = datetime.strptime(exit_timestamp, "%Y-%m-%dT%H:%M:%S.%f%z")
+                exit_time = parser.parse(exit_timestamp)
                 duration = (exit_time - entry_time).days
                 if stage_name in stage_durations:
                     stage_durations[stage_name] += duration
@@ -942,9 +1158,7 @@ def export_csv(start_date=None, end_date=None):
                 # Handle the last stage, which might still be active
                 last_stage_name = stages[-1].get("stage_name", "Unknown Stage")
                 last_entry_timestamp = stages[-1].get("timestamp")
-                last_entry_time = datetime.strptime(
-                    last_entry_timestamp, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                last_entry_time = parser.parse(last_entry_timestamp)
                 last_exit_time = datetime.now(
                     timezone.utc
                 )  # Assuming the deal is still in the last stage
@@ -955,8 +1169,8 @@ def export_csv(start_date=None, end_date=None):
                     stage_durations[last_stage_name] = last_duration
         for stage_name, duration in stage_durations.items():
             flattened_entry[f"{stage_name}_days_in_stage"] = duration
-            flattened_data.append(flattened_entry)
-    # Convert to DataFrame
+        flattened_data.append(flattened_entry)
+        # Convert to DataFrame
     df = pd.DataFrame(flattened_data)
     # List of columns to exclude
     columns_to_exclude = ["hs_object_id", "archived", "hs_lastmodifieddate", "hubspot_owner_id", "pipeline",
@@ -969,12 +1183,12 @@ def export_csv(start_date=None, end_date=None):
     start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
     end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
     # Save to CSV
+    filename = f"Deal_Export--{start_date}-{end_date}.csv"
     file_object = io.StringIO()
     df.to_csv(file_object, index=False)
     file_object.seek(0)
-    filename = f"Deal_Export--{start_date}-{end_date}.csv"
-    # df.to_csv("test.csv", index=False)
     return file_object, filename
+    # df.to_csv(filename, index=False)
 
 # def generate_keywords(start_date=None, end_date=None):
 #     deals = fetch_deals(start_date='2019-07-28', end_date='2024-07-28')
