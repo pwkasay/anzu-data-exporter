@@ -429,19 +429,15 @@ def fetch_single_deal(deal_id):
     if properties_response.status_code == 200:
         deal_properties = properties_response.json()
         all_properties = [prop['name'] for prop in deal_properties]
-        print(all_properties)
     else:
         print(f'Error: {properties_response.status_code}')
-        print(properties_response.text)
     # Make the GET request to fetch the deal information
     response = requests.get(url, headers=headers, params=params)
     # Check if the request was successful
     if response.status_code == 200:
         deal_info = response.json()
-        print(deal_info)
     else:
         print(f'Error: {response.status_code}')
-        print(response.text)
 
 
 def fetch_deals_with_stage_history(start_date=None, end_date=None):
@@ -586,8 +582,6 @@ async def fetch_all_stage_histories(deals, stage_mapping, batch_size=140, delay_
             results = await asyncio.gather(*tasks)
             stage_histories.update({deal_id: history for deal_id, history in results if history})
             # Delay between batches to avoid hitting rate limits
-            print(
-                f"Completed batch {i // batch_size + 1}, waiting {delay_between_batches} seconds before next batch...")
             await asyncio.sleep(delay_between_batches)
         return stage_histories
 
@@ -645,7 +639,6 @@ def fetch_all_deals(start_date=None, end_date=None):
                 break  # Exit retry loop if the request was successful
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 429:  # Rate limit error
-                    print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
                     time.sleep(backoff_time)
                     backoff_time *= 2  # Exponentially increase backoff time
                 else:
@@ -1074,7 +1067,6 @@ def get_deal_stage_name(stage_id, pipeline_id):
     pipeline_data = pipeline_response.json()
     # Search for the stage with the matching ID
     for stage in pipeline_data["stages"]:
-        print(stage)
         if stage["stageId"] == stage_id:
             return stage["label"]
 
@@ -1105,8 +1097,6 @@ def get_deal_stage_history(deals):
                 else:
                     stage.pop(stage_id, None)
             deal["deal_stage_history"] = deal_stage_history
-            # for i in response_parsed:
-            #     print(f"{i['value']}--{i['timestamp']}--{i['sourceType']}")
         else:
             print(
                 f"Failed to retrieve deal data: {response.status_code} {response.text}"
