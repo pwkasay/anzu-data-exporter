@@ -25,17 +25,17 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
     try:
-        deals = attach_notes(deals)
+        deals = asyncio.run(fetch_and_attach_notes(deals))
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
     try:
-        deals = attach_attachments(deals)
+        deals = asyncio.run(attach_attachments(deals))
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
     try:
-        deals = attach_engagements(deals)
+        deals = asyncio.run(attach_engagements(deals))
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
