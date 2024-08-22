@@ -341,7 +341,7 @@ failed_attachments = []
 #                         continue
 #     return deals
 
-async def attach_attachments(deals, batch_size=4, delay_between_batches=1.2):
+async def attach_attachments(deals, batch_size=4, delay_between_batches=1.1):
     sslcontext = ssl.create_default_context(cafile=certifi.where())
     failed_attachments = []
 
@@ -677,7 +677,7 @@ async def fetch_all_stage_histories(deals, stage_mapping, batch_size=140, delay_
         return stage_histories
 
 
-async def fetch_and_attach_notes(deals, batch_size=4, delay_between_batches=1.2):
+async def fetch_and_attach_notes(deals, batch_size=4, delay_between_batches=1.1):
     sslcontext = ssl.create_default_context(cafile=certifi.where())
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
         notes = {}
@@ -1010,7 +1010,7 @@ def batch_with_chatgpt(openai_client, deals):
                     {"role": "system", "content": gpt_prompt},
                     {"role": "user", "content": f"Deal info: {deal}"},
                 ],
-                "max_tokens": 2500,
+                "max_tokens": 4000,
                 "n": 1,
                 "stop": None,
                 "temperature": 0.5,

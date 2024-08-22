@@ -34,18 +34,16 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = asyncio.run(attach_engagements(deals))
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
-
+    # try:
+    #     deals = asyncio.run(attach_engagements(deals))
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
     try:
         batch = batch_with_chatgpt(openai_client, deals)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-
     try:
         results = None
         while not results:
@@ -54,7 +52,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 results = poll_gpt_check(check)
                 print("Results returned")
             else:
-                time.sleep(4)
+                time.sleep(2)
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
