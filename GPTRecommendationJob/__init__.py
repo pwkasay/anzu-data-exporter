@@ -14,31 +14,37 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f"Main exception found: {e}")
         return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = fetch_and_attach_owner_details(deals, "team_member_1")
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = asyncio.run(fetch_and_attach_notes(deals))
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = asyncio.run(attach_attachments(deals))
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+    # try:
+    #     deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
+    # try:
+    #     deals = fetch_and_attach_owner_details(deals, "team_member_1")
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
+    # try:
+    #     deals = asyncio.run(fetch_and_attach_notes(deals))
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
+    # try:
+    #     deals = asyncio.run(attach_attachments(deals))
+    # except Exception as e:
+    #     logging.error(f"Main exception found: {e}")
+    #     return func.HttpResponse(str(e), status_code=500)
     # try:
     #     deals = asyncio.run(attach_engagements(deals))
     # except Exception as e:
     #     logging.error(f"Main exception found: {e}")
     #     return func.HttpResponse(str(e), status_code=500)
+    try:
+        deals = asyncio.run(fetch_notes_attachments_and_engagements(deals))
+    except Exception as e:
+        logging.error(f"Main exception found: {e}")
+        return func.HttpResponse(str(e), status_code=500)
+
     try:
         batch = batch_with_chatgpt(openai_client, deals)
     except Exception as e:

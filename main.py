@@ -152,96 +152,96 @@ def fetch_and_attach_owner_details(deals, owner_property):
 #             time.sleep(2 ** (3 - retries) * base_delay)  # Exponential backoff
 
 
-def batch_fetch_notes(deal_ids):
-    url = "https://api.hubapi.com/crm/v3/objects/notes/search"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-    }
-    # Use separate filters for each deal ID
-    filters = [
-        {
-            "propertyName": "associations.deal",
-            "operator": "EQ",
-            "value": deal_id,
-        }
-        for deal_id in deal_ids
-    ]
-    search_body = {
-        "filterGroups": [{"filters": filters}],
-        "properties": ["hs_note_body", "hs_attachment_ids"],
-    }
-    retries = 3
-    base_delay = 0.2
-    while retries > 0:
-        try:
-            response = requests.post(url, headers=headers, data=json.dumps(search_body))
-            response.raise_for_status()
-            return response.json().get("results", [])
-        except requests.exceptions.RequestException as e:
-            retries -= 1
-            if retries == 0:
-                raise
-            time.sleep(2 ** (3 - retries) * base_delay)  # Exponential backoff
+# def batch_fetch_notes(deal_ids):
+#     url = "https://api.hubapi.com/crm/v3/objects/notes/search"
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+#     }
+#     # Use separate filters for each deal ID
+#     filters = [
+#         {
+#             "propertyName": "associations.deal",
+#             "operator": "EQ",
+#             "value": deal_id,
+#         }
+#         for deal_id in deal_ids
+#     ]
+#     search_body = {
+#         "filterGroups": [{"filters": filters}],
+#         "properties": ["hs_note_body", "hs_attachment_ids"],
+#     }
+#     retries = 3
+#     base_delay = 0.2
+#     while retries > 0:
+#         try:
+#             response = requests.post(url, headers=headers, data=json.dumps(search_body))
+#             response.raise_for_status()
+#             return response.json().get("results", [])
+#         except requests.exceptions.RequestException as e:
+#             retries -= 1
+#             if retries == 0:
+#                 raise
+#             time.sleep(2 ** (3 - retries) * base_delay)  # Exponential backoff
 
 
 # Update the attach_notes function to use batch fetching
-def batch_attach_notes(deals, batch_size=3):
-    deal_ids = [deal["id"] for deal in deals]
-    for i in range(0, len(deal_ids), batch_size):
-        batch_ids = deal_ids[i: i + batch_size]
-        notes = batch_fetch_notes(batch_ids)
-        # Organize notes by deal ID
-        notes_by_deal = {}
-        for note in notes:
-            for association in note.get("associations", {}).get("deals", []):
-                deal_id = association["id"]
-                if deal_id not in notes_by_deal:
-                    notes_by_deal[deal_id] = []
-                notes_by_deal[deal_id].append(note)
-        # Attach notes to the respective deals
-        for deal in deals:
-            deal_id = deal["id"]
-            deal["notes"] = notes_by_deal.get(deal_id, [])
-    return deals
+# def batch_attach_notes(deals, batch_size=3):
+#     deal_ids = [deal["id"] for deal in deals]
+#     for i in range(0, len(deal_ids), batch_size):
+#         batch_ids = deal_ids[i: i + batch_size]
+#         notes = batch_fetch_notes(batch_ids)
+#         # Organize notes by deal ID
+#         notes_by_deal = {}
+#         for note in notes:
+#             for association in note.get("associations", {}).get("deals", []):
+#                 deal_id = association["id"]
+#                 if deal_id not in notes_by_deal:
+#                     notes_by_deal[deal_id] = []
+#                 notes_by_deal[deal_id].append(note)
+#         # Attach notes to the respective deals
+#         for deal in deals:
+#             deal_id = deal["id"]
+#             deal["notes"] = notes_by_deal.get(deal_id, [])
+#     return deals
 
 
-async def fetch_notes(session, deal_id):
-    url = "https://api.hubapi.com/crm/v3/objects/notes/search"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-    }
-    search_body = {
-        "filterGroups": [
-            {
-                "filters": [
-                    {
-                        "propertyName": "associations.deal",
-                        "operator": "EQ",
-                        "value": deal_id,
-                    }
-                ]
-            }
-        ],
-        "properties": ["hs_note_body", "hs_attachment_ids", "propertyName"],
-    }
-    max_retries = 5
-    backoff_time = 2
-    for attempt in range(max_retries):
-        async with session.post(url, headers=headers, json=search_body) as response:
-            if response.status == 200:
-                fetched_notes = await response.json()
-                return deal_id, fetched_notes
-            elif response.status == 429:  # Rate limit error
-                print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
-                await asyncio.sleep(backoff_time)
-                backoff_time *= 2  # Exponentially increase backoff time
-            else:
-                print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
-                return deal_id, None
-    print(f"Max retries reached for deal {deal_id}.")
-    return deal_id, None
+# async def fetch_notes(session, deal_id):
+#     url = "https://api.hubapi.com/crm/v3/objects/notes/search"
+#     headers = {
+#         "Content-Type": "application/json",
+#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+#     }
+#     search_body = {
+#         "filterGroups": [
+#             {
+#                 "filters": [
+#                     {
+#                         "propertyName": "associations.deal",
+#                         "operator": "EQ",
+#                         "value": deal_id,
+#                     }
+#                 ]
+#             }
+#         ],
+#         "properties": ["hs_note_body", "hs_attachment_ids", "propertyName"],
+#     }
+#     max_retries = 5
+#     backoff_time = 2
+#     for attempt in range(max_retries):
+#         async with session.post(url, headers=headers, json=search_body) as response:
+#             if response.status == 200:
+#                 fetched_notes = await response.json()
+#                 return deal_id, fetched_notes
+#             elif response.status == 429:  # Rate limit error
+#                 print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
+#                 await asyncio.sleep(backoff_time)
+#                 backoff_time *= 2  # Exponentially increase backoff time
+#             else:
+#                 print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
+#                 return deal_id, None
+#     print(f"Max retries reached for deal {deal_id}.")
+#     return deal_id, None
 
 
 def download_file(url):
@@ -341,41 +341,41 @@ failed_attachments = []
 #                         continue
 #     return deals
 
-async def attach_attachments(deals, batch_size=4, delay_between_batches=1.1):
-    sslcontext = ssl.create_default_context(cafile=certifi.where())
-    failed_attachments = []
-
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
-        for i in range(0, len(deals), batch_size):
-            batch = deals[i:i + batch_size]
-            tasks = []
-            note_indices = []  # Track the note indices for results matching
-
-            for deal_idx, deal in enumerate(batch):
-                if deal["notes"]:
-                    for note_idx, note in enumerate(deal["notes"]):
-                        if note["properties"]["hs_attachment_ids"]:
-                            file_id = note["properties"]["hs_attachment_ids"]
-                            tasks.append(fetch_attachment(session, file_id))
-                            note_indices.append(
-                                (deal_idx, note_idx))  # Keep track of which deal and note each task corresponds to
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for result_idx, (deal_idx, note_idx) in enumerate(note_indices):
-                attachment_result = results[result_idx]
-                deal = batch[deal_idx]
-                note = deal["notes"][note_idx]
-
-                if isinstance(attachment_result, Exception):
-                    failed_attachments.append(note["properties"]["hs_attachment_ids"])
-                else:
-                    deal["attachments"] = attachment_result
-
-            # Delay between batches to respect rate limits
-            await asyncio.sleep(delay_between_batches)
-
-    return deals
+# async def attach_attachments(deals, batch_size=4, delay_between_batches=1):
+#     sslcontext = ssl.create_default_context(cafile=certifi.where())
+#     failed_attachments = []
+#
+#     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+#         for i in range(0, len(deals), batch_size):
+#             batch = deals[i:i + batch_size]
+#             tasks = []
+#             note_indices = []  # Track the note indices for results matching
+#
+#             for deal_idx, deal in enumerate(batch):
+#                 if deal["notes"]:
+#                     for note_idx, note in enumerate(deal["notes"]):
+#                         if note["properties"]["hs_attachment_ids"]:
+#                             file_id = note["properties"]["hs_attachment_ids"]
+#                             tasks.append(fetch_attachment(session, file_id))
+#                             note_indices.append(
+#                                 (deal_idx, note_idx))  # Keep track of which deal and note each task corresponds to
+#
+#             results = await asyncio.gather(*tasks, return_exceptions=True)
+#
+#             for result_idx, (deal_idx, note_idx) in enumerate(note_indices):
+#                 attachment_result = results[result_idx]
+#                 deal = batch[deal_idx]
+#                 note = deal["notes"][note_idx]
+#
+#                 if isinstance(attachment_result, Exception):
+#                     failed_attachments.append(note["properties"]["hs_attachment_ids"])
+#                 else:
+#                     deal["attachments"] = attachment_result
+#
+#             # Delay between batches to respect rate limits
+#             await asyncio.sleep(delay_between_batches)
+#
+#     return deals
 
 
 # def fetch_engagements(deal_id, engagement_type="EMAIL"):
@@ -402,31 +402,35 @@ async def attach_attachments(deals, batch_size=4, delay_between_batches=1.1):
 #         params["offset"] = data["offset"]
 #     return engagements
 
-async def fetch_engagements(session, deal_id, engagement_type="EMAIL"):
-    url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
-    headers = {
-        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    params = {"limit": 100, "offset": 0}
-    engagements = []
 
-    while True:
-        async with session.get(url, headers=headers, params=params) as response:
-            response.raise_for_status()
-            data = await response.json()
-            engagements.extend(
-                [
-                    engagement
-                    for engagement in data["results"]
-                    if engagement["engagement"]["type"] == engagement_type
-                ]
-            )
-            if not data.get("hasMore"):
-                break
-            params["offset"] = data["offset"]
 
-    return engagements
+
+
+# async def fetch_engagements(session, deal_id, engagement_type="EMAIL"):
+#     url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
+#     headers = {
+#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+#         "Content-Type": "application/json",
+#     }
+#     params = {"limit": 100, "offset": 0}
+#     engagements = []
+#
+#     while True:
+#         async with session.get(url, headers=headers, params=params) as response:
+#             response.raise_for_status()
+#             data = await response.json()
+#             engagements.extend(
+#                 [
+#                     engagement
+#                     for engagement in data["results"]
+#                     if engagement["engagement"]["type"] == engagement_type
+#                 ]
+#             )
+#             if not data.get("hasMore"):
+#                 break
+#             params["offset"] = data["offset"]
+#
+#     return engagements
 
 def fetch_deal_properties():
     properties_url = 'https://api.hubapi.com/properties/v1/deals/properties/'
@@ -447,34 +451,34 @@ def fetch_deal_properties():
 #         deal["engagements"] = engagements
 #     return deals
 
-async def attach_engagements(deals, batch_size=4, delay_between_batches=1.2):
-    sslcontext = ssl.create_default_context(cafile=certifi.where())
-
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
-        for i in range(0, len(deals), batch_size):
-            batch = deals[i:i + batch_size]
-            tasks = []
-            deal_indices = []  # Track the deal indices for results matching
-
-            for deal_idx, deal in enumerate(batch):
-                tasks.append(fetch_engagements(session, deal["id"]))
-                deal_indices.append(deal_idx)  # Keep track of which deal each task corresponds to
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for result_idx, deal_idx in enumerate(deal_indices):
-                engagement_result = results[result_idx]
-                deal = batch[deal_idx]
-
-                if isinstance(engagement_result, Exception):
-                    print(f"Failed to fetch engagements for deal {deal['id']}: {engagement_result}")
-                else:
-                    deal["engagements"] = engagement_result
-
-            # Delay between batches to respect rate limits
-            await asyncio.sleep(delay_between_batches)
-
-    return deals
+# async def attach_engagements(deals, batch_size=4, delay_between_batches=1.2):
+#     sslcontext = ssl.create_default_context(cafile=certifi.where())
+#
+#     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+#         for i in range(0, len(deals), batch_size):
+#             batch = deals[i:i + batch_size]
+#             tasks = []
+#             deal_indices = []  # Track the deal indices for results matching
+#
+#             for deal_idx, deal in enumerate(batch):
+#                 tasks.append(fetch_engagements(session, deal["id"]))
+#                 deal_indices.append(deal_idx)  # Keep track of which deal each task corresponds to
+#
+#             results = await asyncio.gather(*tasks, return_exceptions=True)
+#
+#             for result_idx, deal_idx in enumerate(deal_indices):
+#                 engagement_result = results[result_idx]
+#                 deal = batch[deal_idx]
+#
+#                 if isinstance(engagement_result, Exception):
+#                     print(f"Failed to fetch engagements for deal {deal['id']}: {engagement_result}")
+#                 else:
+#                     deal["engagements"] = engagement_result
+#
+#             # Delay between batches to respect rate limits
+#             await asyncio.sleep(delay_between_batches)
+#
+#     return deals
 
 
 def fetch_single_deal_with_history(deal_id):
@@ -677,7 +681,7 @@ async def fetch_all_stage_histories(deals, stage_mapping, batch_size=140, delay_
         return stage_histories
 
 
-async def fetch_and_attach_notes(deals, batch_size=4, delay_between_batches=1.1):
+async def fetch_and_attach_notes(deals, batch_size=4, delay_between_batches=1):
     sslcontext = ssl.create_default_context(cafile=certifi.where())
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
         notes = {}
@@ -856,15 +860,15 @@ def fetch_deals(start_date=None, end_date=None):
     return deals
 
 
-def get_engagements_for_deal(deal_id):
-    url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
-    headers = {
-        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    response = requests.get(url, headers=headers)
-    response.raise_for_status()
-    return response.json()
+# def get_engagements_for_deal(deal_id):
+#     url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
+#     headers = {
+#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+#         "Content-Type": "application/json",
+#     }
+#     response = requests.get(url, headers=headers)
+#     response.raise_for_status()
+#     return response.json()
 
 
 # def fetch_attachment(file_id):
@@ -892,33 +896,33 @@ def get_engagements_for_deal(deal_id):
 #     else:
 #         raise ValueError(f"Unsupported file type: {extension} for {name}")
 
-async def fetch_attachment(session, file_id):
-    url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
-    headers = {
-        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-        "Content-Type": "application/json",
-        "User-Agent": "Custom",
-    }
-    async with session.get(url, headers=headers) as response:
-        response.raise_for_status()
-        data = await response.json()
-        file_url = data["url"]
-        extension = data["extension"]
-        name = data["name"]
-
-        async with session.get(file_url) as file_response:
-            file_content = await file_response.read()
-
-        if extension == "pdf":
-            return read_pdf(file_content)
-        elif extension == "docx":
-            return read_word(file_content)
-        elif extension == "xlsx":
-            return read_excel(file_content)
-        elif extension == "pptx":
-            return read_ppt(file_content)
-        else:
-            raise ValueError(f"Unsupported file type: {extension} for {name}")
+# async def fetch_attachment(session, file_id):
+#     url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
+#     headers = {
+#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+#         "Content-Type": "application/json",
+#         "User-Agent": "Custom",
+#     }
+#     async with session.get(url, headers=headers) as response:
+#         response.raise_for_status()
+#         data = await response.json()
+#         file_url = data["url"]
+#         extension = data["extension"]
+#         name = data["name"]
+#
+#         async with session.get(file_url) as file_response:
+#             file_content = await file_response.read()
+#
+#         if extension == "pdf":
+#             return read_pdf(file_content)
+#         elif extension == "docx":
+#             return read_word(file_content)
+#         elif extension == "xlsx":
+#             return read_excel(file_content)
+#         elif extension == "pptx":
+#             return read_ppt(file_content)
+#         else:
+#             raise ValueError(f"Unsupported file type: {extension} for {name}")
 
 def organize_deals(deals):
     deals_dict = {}
@@ -991,11 +995,6 @@ user_prompt_for_final = read_prompt_text(user_prompt_for_final_path)
 system_prompt_for_final_path = "data/system_prompt_for_final.txt"
 system_prompt_for_final = read_prompt_text(system_prompt_for_final_path)
 
-
-# {"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo-0125", "messages": [{"role": "system", "content": "You are a helpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
-# {"custom_id": "request-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo-0125", "messages": [{"role": "system", "content": "You are an unhelpful assistant."},{"role": "user", "content": "Hello world!"}],"max_tokens": 1000}}
-
-
 def batch_with_chatgpt(openai_client, deals):
     jsonl_lines = []
     for deal in deals:
@@ -1010,7 +1009,7 @@ def batch_with_chatgpt(openai_client, deals):
                     {"role": "system", "content": gpt_prompt},
                     {"role": "user", "content": f"Deal info: {deal}"},
                 ],
-                "max_tokens": 4000,
+                "max_tokens": 2500,
                 "n": 1,
                 "stop": None,
                 "temperature": 0.5,
@@ -1240,6 +1239,160 @@ def get_deal_stage_history(deals):
                 f"Failed to retrieve deal data: {response.status_code} {response.text}"
             )
     return deals
+
+
+async def fetch_notes_attachments_and_engagements(deals, batch_size=4, delay_between_batches=1.2):
+    sslcontext = ssl.create_default_context(cafile=certifi.where())
+
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+        for i in range(0, len(deals), batch_size):
+            batch = deals[i:i + batch_size]
+            tasks = [fetch_data_for_deal(session, deal["id"]) for deal in batch]
+            results = await asyncio.gather(*tasks)
+
+            for deal, result in zip(batch, results):
+                deal["notes"] = result.get("notes")
+                deal["attachments"] = result.get("attachments")
+                deal["engagements"] = result.get("engagements")
+
+            await asyncio.sleep(delay_between_batches)
+        return deals
+
+
+async def fetch_data_for_deal(session, deal_id):
+    notes_task = fetch_notes(session, deal_id)
+    engagements_task = fetch_engagements(session, deal_id)
+
+    notes_result, engagements_result = await asyncio.gather(notes_task, engagements_task)
+
+    notes, attachments = await process_notes_for_attachments(session, notes_result['results'])
+
+    return {
+        "notes": notes,
+        "attachments": attachments,
+        "engagements": engagements_result,
+    }
+
+
+async def fetch_notes(session, deal_id):
+    url = "https://api.hubapi.com/crm/v3/objects/notes/search"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+    }
+    search_body = {
+        "filterGroups": [
+            {
+                "filters": [
+                    {
+                        "propertyName": "associations.deal",
+                        "operator": "EQ",
+                        "value": deal_id,
+                    }
+                ]
+            }
+        ],
+        "properties": ["hs_note_body", "hs_attachment_ids", "propertyName"],
+    }
+
+    max_retries = 5
+    backoff_time = 2
+    for attempt in range(max_retries):
+        async with session.post(url, headers=headers, json=search_body) as response:
+            if response.status == 200:
+                return await response.json()
+            elif response.status == 429:  # Rate limit error
+                print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
+                await asyncio.sleep(backoff_time)
+                backoff_time *= 2  # Exponentially increase backoff time
+            else:
+                print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
+                return None
+
+    print(f"Max retries reached for deal {deal_id}.")
+    return None
+
+
+async def process_notes_for_attachments(session, notes):
+    attachments = []
+    tasks = []
+    note_indices = []
+
+    for note_idx, note in enumerate(notes):
+        if note["properties"].get("hs_attachment_ids"):
+            file_id = note["properties"]["hs_attachment_ids"]
+            tasks.append(fetch_attachment(session, file_id))
+            note_indices.append(note_idx)
+
+    if tasks:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for note_idx, result in zip(note_indices, results):
+            if isinstance(result, Exception):
+                print(f"Failed to fetch attachment for note index {note_idx}: {result}")
+            else:
+                attachments.append(result)
+
+    return notes, attachments
+
+
+async def fetch_attachment(session, file_id):
+    url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json",
+        "User-Agent": "Custom",
+    }
+    async with session.get(url, headers=headers) as response:
+        response.raise_for_status()
+        data = await response.json()
+        file_url = data["url"]
+        extension = data["extension"]
+        name = data["name"]
+
+        async with session.get(file_url) as file_response:
+            file_content = await file_response.read()
+
+        if extension == "pdf":
+            return read_pdf(file_content)
+        elif extension == "docx":
+            return read_word(file_content)
+        elif extension == "xlsx":
+            return read_excel(file_content)
+        elif extension == "pptx":
+            return read_ppt(file_content)
+        else:
+            raise ValueError(f"Unsupported file type: {extension} for {name}")
+
+
+async def fetch_engagements(session, deal_id, engagement_type="EMAIL"):
+    url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
+    headers = {
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    params = {"limit": 100, "offset": 0}
+    engagements = []
+
+    while True:
+        async with session.get(url, headers=headers, params=params) as response:
+            response.raise_for_status()
+            data = await response.json()
+            engagements.extend(
+                [
+                    engagement
+                    for engagement in data["results"]
+                    if engagement["engagement"]["type"] == engagement_type
+                ]
+            )
+            if not data.get("hasMore"):
+                break
+            params["offset"] = data["offset"]
+
+    return engagements
+
+
+
 
 
 def export_csv(start_date=None, end_date=None):
