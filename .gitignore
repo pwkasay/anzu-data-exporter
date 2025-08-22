@@ -161,3 +161,57 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 .DS_Store
+
+# Azure Functions
+local.settings.json
+.python_packages/
+.func/
+*.zip
+.azure/
+
+# VS Code
+.vscode/
+
+# Claude Code configuration
+CLAUDE.md
+
+# Project specific data files
+data/deal_result.jsonl
+data/*.jsonl
+data/*.csv
+data/*.xlsx
+*.csv
+*.xlsx
+temp/
+tmp/
+
+# Secrets and credentials
+*.key
+*.pem
+*.cer
+*.pfx
+credentials.json
+secrets.json
+config.json
+
+# Logs
+logs/
+*.log.*
+
+# Cache
+.cache/
+*.cache
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Test data
+test_data/
+mock_data/
+
+# Output files
+output/
+exports/
+results/
