@@ -1,84 +1,64 @@
 from main import *
 import azure.functions as func
 import logging
+from error_handler import azure_function_error_handler
 
 
+@azure_function_error_handler
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('Python HTTP trigger function processed a request.')
-    print("Main triggered")
-    start_date = req.params.get('start_date', None)
-    end_date = req.params.get('end_date', None)
+    logging.info("Python HTTP trigger function processed a request.")
 
-    try:
-        deals = fetch_deals(start_date=start_date, end_date=end_date)
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
-    # try:
-    #     deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
-    # except Exception as e:
-    #     logging.error(f"Main exception found: {e}")
-    #     return func.HttpResponse(str(e), status_code=500)
-    # try:
-    #     deals = fetch_and_attach_owner_details(deals, "team_member_1")
-    # except Exception as e:
-    #     logging.error(f"Main exception found: {e}")
-    #     return func.HttpResponse(str(e), status_code=500)
-    # try:
-    #     deals = asyncio.run(fetch_and_attach_notes(deals))
-    # except Exception as e:
-    #     logging.error(f"Main exception found: {e}")
-    #     return func.HttpResponse(str(e), status_code=500)
-    # try:
-    #     deals = asyncio.run(attach_attachments(deals))
-    # except Exception as e:
-    #     logging.error(f"Main exception found: {e}")
-    #     return func.HttpResponse(str(e), status_code=500)
-    # try:
-    #     deals = asyncio.run(attach_engagements(deals))
-    # except Exception as e:
-    #     logging.error(f"Main exception found: {e}")
-    #     return func.HttpResponse(str(e), status_code=500)
-    try:
-        deals = asyncio.run(fetch_notes_attachments_and_engagements(deals))
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+    start_date = req.params.get("start_date", None)
+    end_date = req.params.get("end_date", None)
 
-    try:
-        batch = batch_with_chatgpt(openai_client, deals)
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
-    try:
-        results = None
-        while not results:
-            check = check_gpt(openai_client, batch)
-            if check:
-                results = poll_gpt_check(check)
-                print("Results returned")
-            else:
-                time.sleep(2)
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+    # Fetch deals and enrich with notes/attachments/engagements
+    deals = fetch_deals(start_date=start_date, end_date=end_date)
+    deals = asyncio.run(fetch_notes_attachments_and_engagements(deals))
 
-    try:
-        for deal in deals:
-            for result in results:
-                deal_data = json.loads(result['response']['body']['choices'][0]['message']['content'])
-                deal_name = deal_data['dealname']
-                if deal['properties']['dealname'] == deal_name:
-                    deal['parsed'] = deal_data
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+    # Process deals through GPT batch API
+    batch = batch_with_chatgpt(openai_client, deals)
 
-    try:
-        for deal in deals:
+    # Poll for results
+    results = None
+    poll_attempts = 0
+    max_poll_attempts = 300  # 10 minutes max with 2-second intervals
+
+    while not results and poll_attempts < max_poll_attempts:
+        check = check_gpt(openai_client, batch)
+        if check:
+            results = poll_gpt_check(check)
+            logging.info("GPT batch processing completed")
+            break
+        poll_attempts += 1
+        time.sleep(2)
+
+    if not results:
+        raise TimeoutError("GPT batch processing timed out after 10 minutes")
+
+    # Match GPT results to deals using O(1) lookup
+    deals_by_name = {deal["properties"]["dealname"]: deal for deal in deals}
+    matched_count = 0
+
+    for result in results:
+        deal_data = json.loads(
+            result["response"]["body"]["choices"][0]["message"]["content"]
+        )
+        deal_name = deal_data.get("dealname")
+
+        if deal_name and deal_name in deals_by_name:
+            deals_by_name[deal_name]["parsed"] = deal_data
+            matched_count += 1
+        else:
+            logging.warning(f"Could not match GPT result for deal: {deal_name}")
+
+    # Update HubSpot with keywords
+    update_count = 0
+    for deal in deals:
+        if "parsed" in deal:
             update_hubspot_keywords(deal)
-        return func.HttpResponse(f"Main 1 - Processed ", status_code=200)
-    except Exception as e:
-        logging.error(f"Main exception found: {e}")
-        return func.HttpResponse(str(e), status_code=500)
+            update_count += 1
 
+    return func.HttpResponse(
+        f"Successfully processed {len(deals)} deals. Matched {matched_count} GPT results. Updated {update_count} deals.",
+        status_code=200,
+    )

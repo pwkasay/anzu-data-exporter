@@ -44,11 +44,12 @@ def get_secrets():
         raise
 
 
-# from dotenv import load_dotenv
-#
-# mode = "dev"
-# if mode == "dev":
-#     load_dotenv()
+from dotenv import load_dotenv
+
+# Determine environment mode from environment variable or default to 'dev'
+mode = os.getenv("ENVIRONMENT", "dev")
+if mode == "dev":
+    load_dotenv()
 
 (
     CLIENT_ID,
@@ -76,11 +77,49 @@ def search_hubspot_object(object_type, search_body):
 owner_details_cache = {}
 
 
-# Function to fetch owner details with throttling and caching
+# Async function to fetch owner details with throttling and caching (v3 API)
+async def fetch_owner_details_async(session, owner_id):
+    if owner_id in owner_details_cache:
+        return owner_id, owner_details_cache[owner_id]
+
+    url = f"https://api.hubapi.com/crm/v3/owners/{owner_id}"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+    }
+
+    max_retries = 3
+    backoff_time = 2
+
+    for attempt in range(max_retries):
+        try:
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    owner_data = await response.json()
+                    owner_details_cache[owner_id] = owner_data
+                    return owner_id, owner_data
+                elif response.status == 429:  # Rate limit
+                    await asyncio.sleep(backoff_time)
+                    backoff_time *= 2
+                else:
+                    logging.error(
+                        f"Failed to fetch owner {owner_id}: {response.status}"
+                    )
+                    return owner_id, None
+        except Exception as e:
+            logging.error(f"Error fetching owner {owner_id}: {e}")
+            if attempt == max_retries - 1:
+                return owner_id, None
+            await asyncio.sleep(backoff_time)
+
+    return owner_id, None
+
+
+# Sync wrapper for backward compatibility
 def fetch_owner_details(owner_id):
     if owner_id in owner_details_cache:
         return owner_details_cache[owner_id]
-    url = f"https://api.hubapi.com/owners/v2/owners/{owner_id}"
+    url = f"https://api.hubapi.com/crm/v3/owners/{owner_id}"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
@@ -100,148 +139,47 @@ def fetch_owner_details(owner_id):
             time.sleep(2 ** (3 - retries))  # Exponential backoff
 
 
-def fetch_and_attach_owner_details(deals, owner_property):
+# Async function to fetch and attach owner details
+async def fetch_and_attach_owner_details_async(deals, owner_property, batch_size=10):
     owner_ids = [
         deal["properties"].get(owner_property)
         for deal in deals
         if deal["properties"].get(owner_property)
     ]
     unique_owner_ids = list(set(owner_ids))
-    owners = {}
-    for owner_id in unique_owner_ids:
-        owners[owner_id] = fetch_owner_details(owner_id)
-        time.sleep(0.1)  # Throttle requests to avoid hitting rate limits
+
+    sslcontext = ssl.create_default_context(cafile=certifi.where())
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=sslcontext)
+    ) as session:
+        owners = {}
+
+        # Process in batches to avoid overwhelming the API
+        for i in range(0, len(unique_owner_ids), batch_size):
+            batch = unique_owner_ids[i : i + batch_size]
+            tasks = [fetch_owner_details_async(session, owner_id) for owner_id in batch]
+            results = await asyncio.gather(*tasks)
+
+            for owner_id, owner_data in results:
+                if owner_data:
+                    owners[owner_id] = owner_data
+
+            # Small delay between batches
+            if i + batch_size < len(unique_owner_ids):
+                await asyncio.sleep(0.5)
+
+    # Attach owner details to deals
     for deal in deals:
         owner_id = deal["properties"].get(owner_property)
         if owner_id:
             deal[f"{owner_property}_details"] = owners.get(owner_id, {})
+
     return deals
 
 
-# def batch_fetch_notes(deal_ids):
-#     url = "https://api.hubapi.com/crm/v3/objects/notes/search"
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#     }
-#     search_body = {
-#         "filterGroups": [
-#             {
-#                 "filters": [
-#                     {
-#                         "propertyName": "associations.deal",
-#                         "operator": "IN",  # Use 'IN' operator to match multiple deal IDs
-#                         "values": deal_ids,  # Pass a list of deal IDs
-#                     }
-#                 ]
-#             }
-#         ],
-#         "properties": ["hs_note_body", "hs_attachment_ids"]
-#     }
-#     retries = 3
-#     base_delay = 0.2
-#     while retries > 0:
-#         try:
-#             response = requests.post(url, headers=headers, data=json.dumps(search_body))
-#             response.raise_for_status()
-#             return response.json().get('results', [])
-#         except requests.exceptions.RequestException as e:
-#             retries -= 1
-#             if retries == 0:
-#                 raise
-#             time.sleep(2 ** (3 - retries) * base_delay)  # Exponential backoff
-
-
-# def batch_fetch_notes(deal_ids):
-#     url = "https://api.hubapi.com/crm/v3/objects/notes/search"
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#     }
-#     # Use separate filters for each deal ID
-#     filters = [
-#         {
-#             "propertyName": "associations.deal",
-#             "operator": "EQ",
-#             "value": deal_id,
-#         }
-#         for deal_id in deal_ids
-#     ]
-#     search_body = {
-#         "filterGroups": [{"filters": filters}],
-#         "properties": ["hs_note_body", "hs_attachment_ids"],
-#     }
-#     retries = 3
-#     base_delay = 0.2
-#     while retries > 0:
-#         try:
-#             response = requests.post(url, headers=headers, data=json.dumps(search_body))
-#             response.raise_for_status()
-#             return response.json().get("results", [])
-#         except requests.exceptions.RequestException as e:
-#             retries -= 1
-#             if retries == 0:
-#                 raise
-#             time.sleep(2 ** (3 - retries) * base_delay)  # Exponential backoff
-
-
-# Update the attach_notes function to use batch fetching
-# def batch_attach_notes(deals, batch_size=3):
-#     deal_ids = [deal["id"] for deal in deals]
-#     for i in range(0, len(deal_ids), batch_size):
-#         batch_ids = deal_ids[i: i + batch_size]
-#         notes = batch_fetch_notes(batch_ids)
-#         # Organize notes by deal ID
-#         notes_by_deal = {}
-#         for note in notes:
-#             for association in note.get("associations", {}).get("deals", []):
-#                 deal_id = association["id"]
-#                 if deal_id not in notes_by_deal:
-#                     notes_by_deal[deal_id] = []
-#                 notes_by_deal[deal_id].append(note)
-#         # Attach notes to the respective deals
-#         for deal in deals:
-#             deal_id = deal["id"]
-#             deal["notes"] = notes_by_deal.get(deal_id, [])
-#     return deals
-
-
-# async def fetch_notes(session, deal_id):
-#     url = "https://api.hubapi.com/crm/v3/objects/notes/search"
-#     headers = {
-#         "Content-Type": "application/json",
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#     }
-#     search_body = {
-#         "filterGroups": [
-#             {
-#                 "filters": [
-#                     {
-#                         "propertyName": "associations.deal",
-#                         "operator": "EQ",
-#                         "value": deal_id,
-#                     }
-#                 ]
-#             }
-#         ],
-#         "properties": ["hs_note_body", "hs_attachment_ids", "propertyName"],
-#     }
-#     max_retries = 5
-#     backoff_time = 2
-#     for attempt in range(max_retries):
-#         async with session.post(url, headers=headers, json=search_body) as response:
-#             if response.status == 200:
-#                 fetched_notes = await response.json()
-#                 return deal_id, fetched_notes
-#             elif response.status == 429:  # Rate limit error
-#                 print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
-#                 await asyncio.sleep(backoff_time)
-#                 backoff_time *= 2  # Exponentially increase backoff time
-#             else:
-#                 print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
-#                 return deal_id, None
-#     print(f"Max retries reached for deal {deal_id}.")
-#     return deal_id, None
+# Sync wrapper for backward compatibility
+def fetch_and_attach_owner_details(deals, owner_property):
+    return asyncio.run(fetch_and_attach_owner_details_async(deals, owner_property))
 
 
 def download_file(url):
@@ -314,328 +252,90 @@ def get_file_details(file_id):
     return response.json()
 
 
-# def attach_notes(deals):
-#     for deal in deals:
-#         # time.sleep(0.5)
-#         deal_id = deal["id"]
-#         notes = fetch_notes(deal_id)
-#         deal["notes"] = notes
-#     return deals
-
-
 failed_attachments = []
 
 
-# def attach_attachments(deals):
-#     for deal in deals:
-#         if deal["notes"]:
-#             for note in deal["notes"]:
-#                 if note["properties"]["hs_attachment_ids"]:
-#                     file_id = note["properties"]["hs_attachment_ids"]
-#                     # time.sleep(0.4)
-#                     try:
-#                         attachment = fetch_attachment(file_id)
-#                         deal["attachments"] = attachment
-#                     except:
-#                         failed_attachments.append(file_id)
-#                         continue
-#     return deals
-
-# async def attach_attachments(deals, batch_size=4, delay_between_batches=1):
-#     sslcontext = ssl.create_default_context(cafile=certifi.where())
-#     failed_attachments = []
-#
-#     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
-#         for i in range(0, len(deals), batch_size):
-#             batch = deals[i:i + batch_size]
-#             tasks = []
-#             note_indices = []  # Track the note indices for results matching
-#
-#             for deal_idx, deal in enumerate(batch):
-#                 if deal["notes"]:
-#                     for note_idx, note in enumerate(deal["notes"]):
-#                         if note["properties"]["hs_attachment_ids"]:
-#                             file_id = note["properties"]["hs_attachment_ids"]
-#                             tasks.append(fetch_attachment(session, file_id))
-#                             note_indices.append(
-#                                 (deal_idx, note_idx))  # Keep track of which deal and note each task corresponds to
-#
-#             results = await asyncio.gather(*tasks, return_exceptions=True)
-#
-#             for result_idx, (deal_idx, note_idx) in enumerate(note_indices):
-#                 attachment_result = results[result_idx]
-#                 deal = batch[deal_idx]
-#                 note = deal["notes"][note_idx]
-#
-#                 if isinstance(attachment_result, Exception):
-#                     failed_attachments.append(note["properties"]["hs_attachment_ids"])
-#                 else:
-#                     deal["attachments"] = attachment_result
-#
-#             # Delay between batches to respect rate limits
-#             await asyncio.sleep(delay_between_batches)
-#
-#     return deals
-
-
-# def fetch_engagements(deal_id, engagement_type="EMAIL"):
-#     url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
-#     headers = {
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#         "Content-Type": "application/json",
-#     }
-#     params = {"limit": 100, "offset": 0}
-#     engagements = []
-#     while True:
-#         response = requests.get(url, headers=headers, params=params)
-#         response.raise_for_status()
-#         data = response.json()
-#         engagements.extend(
-#             [
-#                 engagement
-#                 for engagement in data["results"]
-#                 if engagement["engagement"]["type"] == engagement_type
-#             ]
-#         )
-#         if not data["hasMore"]:
-#             break
-#         params["offset"] = data["offset"]
-#     return engagements
-
-
-
-
-
-# async def fetch_engagements(session, deal_id, engagement_type="EMAIL"):
-#     url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
-#     headers = {
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#         "Content-Type": "application/json",
-#     }
-#     params = {"limit": 100, "offset": 0}
-#     engagements = []
-#
-#     while True:
-#         async with session.get(url, headers=headers, params=params) as response:
-#             response.raise_for_status()
-#             data = await response.json()
-#             engagements.extend(
-#                 [
-#                     engagement
-#                     for engagement in data["results"]
-#                     if engagement["engagement"]["type"] == engagement_type
-#                 ]
-#             )
-#             if not data.get("hasMore"):
-#                 break
-#             params["offset"] = data["offset"]
-#
-#     return engagements
-
 def fetch_deal_properties():
-    properties_url = 'https://api.hubapi.com/properties/v1/deals/properties/'
+    """Fetch deal properties using v3 API."""
+    properties_url = "https://api.hubapi.com/crm/v3/properties/deals"
     headers = {
-        'Authorization': f'Bearer {HUBSPOT_API_KEY}',
-        'Content-Type': 'application/json'
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json",
     }
-    # Fetch all deal properties
     response = requests.get(properties_url, headers=headers)
-    return response.json()
-
-
-# def attach_engagements(deals):
-#     for deal in deals:
-#         time.sleep(0.1)
-#         deal_id = deal["id"]
-#         engagements = fetch_engagements(deal_id)
-#         deal["engagements"] = engagements
-#     return deals
-
-# async def attach_engagements(deals, batch_size=4, delay_between_batches=1.2):
-#     sslcontext = ssl.create_default_context(cafile=certifi.where())
-#
-#     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
-#         for i in range(0, len(deals), batch_size):
-#             batch = deals[i:i + batch_size]
-#             tasks = []
-#             deal_indices = []  # Track the deal indices for results matching
-#
-#             for deal_idx, deal in enumerate(batch):
-#                 tasks.append(fetch_engagements(session, deal["id"]))
-#                 deal_indices.append(deal_idx)  # Keep track of which deal each task corresponds to
-#
-#             results = await asyncio.gather(*tasks, return_exceptions=True)
-#
-#             for result_idx, deal_idx in enumerate(deal_indices):
-#                 engagement_result = results[result_idx]
-#                 deal = batch[deal_idx]
-#
-#                 if isinstance(engagement_result, Exception):
-#                     print(f"Failed to fetch engagements for deal {deal['id']}: {engagement_result}")
-#                 else:
-#                     deal["engagements"] = engagement_result
-#
-#             # Delay between batches to respect rate limits
-#             await asyncio.sleep(delay_between_batches)
-#
-#     return deals
+    response.raise_for_status()
+    return response.json().get("results", [])
 
 
 def fetch_single_deal_with_history(deal_id):
-    properties_url = 'https://api.hubapi.com/properties/v2/deals/properties'
+    properties_url = "https://api.hubapi.com/properties/v2/deals/properties"
     headers = {
-        'Authorization': f'Bearer {HUBSPOT_API_KEY}',
-        'Content-Type': 'application/json'
+        "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+        "Content-Type": "application/json",
     }
     # Fetch all deal properties
     response = requests.get(properties_url, headers=headers)
     if response.status_code == 200:
         deal_properties = response.json()
-        all_properties = [prop['name'] for prop in deal_properties]
+        all_properties = [prop["name"] for prop in deal_properties]
         # HubSpot API endpoint for fetching a single deal with property history
-        deal_url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
+        deal_url = f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
         params = {
-            'propertiesWithHistory': ','.join(all_properties)  # Fetch all properties with their history
+            "propertiesWithHistory": ",".join(
+                all_properties
+            )  # Fetch all properties with their history
         }
         deal_response = requests.get(deal_url, headers=headers, params=params)
         if deal_response.status_code == 200:
             deal_info = deal_response.json()
             print(deal_info)
         else:
-            print(f'Error: {deal_response.status_code}')
+            print(f"Error: {deal_response.status_code}")
             print(deal_response.text)
     else:
-        print(f'Error: {response.status_code}')
+        print(f"Error: {response.status_code}")
         print(response.text)
 
 
 def fetch_single_deal(deal_id):
-    properties_url = 'https://api.hubapi.com/properties/v2/deals/properties'
-    url = f'https://api.hubapi.com/crm/v3/objects/deals/{deal_id}'
+    properties_url = "https://api.hubapi.com/properties/v2/deals/properties"
+    url = f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
     headers = {
         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
         "Content-Type": "application/json",
     }
     params = {
-        'properties': [
-            'dealname', 'amount', 'dealstage', 'pipeline',
-            'closedate', 'createdate', 'hubspot_owner_id', 'fund'
+        "properties": [
+            "dealname",
+            "amount",
+            "dealstage",
+            "pipeline",
+            "closedate",
+            "createdate",
+            "hubspot_owner_id",
+            "fund",
         ]
     }
     properties_response = requests.get(properties_url, headers=headers)
     if properties_response.status_code == 200:
         deal_properties = properties_response.json()
-        all_properties = [prop['name'] for prop in deal_properties]
+        all_properties = [prop["name"] for prop in deal_properties]
     else:
-        print(f'Error: {properties_response.status_code}')
+        print(f"Error: {properties_response.status_code}")
     # Make the GET request to fetch the deal information
     response = requests.get(url, headers=headers, params=params)
     # Check if the request was successful
     if response.status_code == 200:
         deal_info = response.json()
     else:
-        print(f'Error: {response.status_code}')
+        print(f"Error: {response.status_code}")
 
 
+# DEPRECATED - Use fetch_deals() with include_stage_history=True instead
 def fetch_deals_with_stage_history(start_date=None, end_date=None):
-    properties = [
-        "dealname",
-        "priority",
-        "referral_type",
-        "pipeline",
-        "broad_category_updated",
-        "subcategory",
-        "fund",
-        "hubspot_owner_id",
-        "team_member_1",
-        "createdate",
-        "keywords",
-    ]
-    deals = []
-    # Set default dates if none are provided
-    if start_date is None and end_date is None:
-        start_date = str(datetime.now().date() + relativedelta(months=-3))
-        end_date = str(datetime.now().date() + relativedelta(days=+1))
-    start_date = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date = datetime.strptime(end_date, "%Y-%m-%d")
-    # Set to midnight
-    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Convert to Unix timestamp in milliseconds
-    start_date = int(start_date.timestamp() * 1000)
-    end_date = int(end_date.timestamp() * 1000)
-    after = None
-    max_retries = 3
-    base_delay = 0.5
-    # Fetch the stage mapping once
-    stage_mapping = get_stage_mapping()
-    while True:
-        search_body = {
-            "filterGroups": [
-                {
-                    "filters": [
-                        {
-                            "propertyName": "createdate",
-                            "operator": "BETWEEN",
-                            "highValue": end_date,
-                            "value": start_date,
-                        },
-                        {
-                            "propertyName": "pipeline",
-                            "operator": "EQ",
-                            "value": "default",
-                        },
-                    ]
-                }
-            ],
-            "properties": properties,
-            "limit": 100,
-        }
-        if after:
-            search_body["after"] = after
-        for attempt in range(max_retries):
-            try:
-                search_results = search_hubspot_object("deals", search_body)
-                break
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    delay = base_delay * (attempt ** 2)
-                    time.sleep(delay)
-                else:
-                    print(f"Attempt {attempt + 1} failed: {e}. No more retries left.")
-                    raise
-        # Process each deal to fetch its stage history
-        for deal in search_results.get("results", []):
-            deal_id = deal["id"]
-            url = f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
-            headers = {
-                "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            params = {
-                "propertiesWithHistory": "dealstage",
-            }
-            # Make the request to HubSpot API
-            response = requests.get(url, headers=headers, params=params)
-            if response.status_code == 200:
-                deal_stage_history = response.json()["propertiesWithHistory"]["dealstage"]
-                for stage in deal_stage_history:
-                    stage_id = stage["value"]
-                    if stage_mapping.get(stage_id):
-                        stage_name = stage_mapping[stage_id]
-                        stage["stage_name"] = stage_name
-                    else:
-                        stage.pop(stage_id, None)
-                deal["deal_stage_history"] = deal_stage_history
-            else:
-                print(f"Failed to retrieve deal data: {response.status_code} {response.text}")
-            deals.append(deal)
-        pagination = search_results.get("paging", [])
-        if pagination and "next" in pagination:
-            after = pagination["next"]["after"]
-        else:
-            break
-    return deals
+    return fetch_deals(
+        start_date=start_date, end_date=end_date, include_stage_history=True
+    )
 
 
 async def fetch_stage_history(session, deal_id, stage_mapping):
@@ -651,31 +351,46 @@ async def fetch_stage_history(session, deal_id, stage_mapping):
         async with session.get(url, headers=headers, params=params) as response:
             if response.status == 200:
                 deal_stage_history = await response.json()
-                deal_stage_history = deal_stage_history["propertiesWithHistory"]["dealstage"]
+                deal_stage_history = deal_stage_history["propertiesWithHistory"][
+                    "dealstage"
+                ]
                 for stage in deal_stage_history:
                     stage_id = stage["value"]
                     stage["stage_name"] = stage_mapping.get(stage_id, "Unknown Stage")
                 return deal_id, deal_stage_history
             elif response.status == 429:  # Rate limit error
-                print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
+                print(
+                    f"Rate limit hit: waiting {backoff_time} seconds before retrying..."
+                )
                 await asyncio.sleep(backoff_time)
                 backoff_time *= 2  # Exponentially increase backoff time
             else:
-                print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
+                print(
+                    f"Failed to retrieve deal data: {response.status} {await response.text()}"
+                )
                 return deal_id, None
     print(f"Max retries reached for deal {deal_id}.")
     return deal_id, None
 
 
-async def fetch_all_stage_histories(deals, stage_mapping, batch_size=140, delay_between_batches=10):
+async def fetch_all_stage_histories(
+    deals, stage_mapping, batch_size=140, delay_between_batches=10
+):
     sslcontext = ssl.create_default_context(cafile=certifi.where())
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=sslcontext)
+    ) as session:
         stage_histories = {}
         for i in range(0, len(deals), batch_size):
-            batch = deals[i:i + batch_size]
-            tasks = [fetch_stage_history(session, deal["id"], stage_mapping) for deal in batch]
+            batch = deals[i : i + batch_size]
+            tasks = [
+                fetch_stage_history(session, deal["id"], stage_mapping)
+                for deal in batch
+            ]
             results = await asyncio.gather(*tasks)
-            stage_histories.update({deal_id: history for deal_id, history in results if history})
+            stage_histories.update(
+                {deal_id: history for deal_id, history in results if history}
+            )
             # Delay between batches to avoid hitting rate limits
             await asyncio.sleep(delay_between_batches)
         return stage_histories
@@ -683,10 +398,12 @@ async def fetch_all_stage_histories(deals, stage_mapping, batch_size=140, delay_
 
 async def fetch_and_attach_notes(deals, batch_size=4, delay_between_batches=1):
     sslcontext = ssl.create_default_context(cafile=certifi.where())
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=sslcontext)
+    ) as session:
         notes = {}
         for i in range(0, len(deals), batch_size):
-            batch = deals[i:i + batch_size]
+            batch = deals[i : i + batch_size]
             tasks = [fetch_notes(session, deal["id"]) for deal in batch]
             results = await asyncio.gather(*tasks)
             notes.update({deal_id: note for deal_id, note in results if note})
@@ -695,93 +412,41 @@ async def fetch_and_attach_notes(deals, batch_size=4, delay_between_batches=1):
         for deal in deals:
             deal_id = deal["id"]
             deal_notes = notes.get(deal_id)
-            deal["notes"] = deal_notes['results']
+            deal["notes"] = deal_notes["results"]
         return deals
 
 
+# DEPRECATED - Use fetch_deals() instead
 def fetch_all_deals(start_date=None, end_date=None):
-    if start_date is None and end_date is None:
-        start_date = str(datetime.now().date() + relativedelta(months=-3))
-        end_date = str(datetime.now().date() + relativedelta(days=+1))
-    start_date = datetime.strptime(start_date, "%Y-%m-%d")
-    end_date = datetime.strptime(end_date, "%Y-%m-%d")
-    # HubSpot needs datetime to be set to midnight
-    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Convert the close date to a Unix timestamp in milliseconds
-    start_date = int(start_date.timestamp() * 1000)
-    end_date = int(end_date.timestamp() * 1000)
-    properties = [
-        "dealname", "priority", "referral_type", "pipeline", "broad_category_updated",
-        "subcategory", "fund", "hubspot_owner_id", "team_member_1", "createdate", "keywords",
-    ]
-    deals = []
-    after = None
-    max_retries = 5
-    backoff_time = 2  # Initial backoff time in seconds
-    while True:
-        # Batch fetch deals with pagination handling
-        search_body = {
-            "filterGroups": [
-                {
-                    "filters": [
-                        {"propertyName": "createdate", "operator": "BETWEEN", "highValue": end_date,
-                         "value": start_date},
-                        {"propertyName": "pipeline", "operator": "EQ", "value": "default"},
-                    ]
-                }
-            ],
-            "properties": properties,
-            "limit": 100,
-        }
-        if after:
-            search_body["after"] = after
-        for attempt in range(max_retries):
-            try:
-                # Implement the search_hubspot_object method to fetch deals
-                search_results = search_hubspot_object("deals", search_body)
-                fetched_deals = search_results.get("results", [])
-                deals.extend(fetched_deals)
-                # Check if there is more data to fetch
-                pagination = search_results.get("paging")
-                if pagination and "next" in pagination:
-                    after = pagination["next"]["after"]
-                else:
-                    return deals  # Exit loop if all data has been fetched
-
-                break  # Exit retry loop if the request was successful
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:  # Rate limit error
-                    time.sleep(backoff_time)
-                    backoff_time *= 2  # Exponentially increase backoff time
-                else:
-                    raise  # Re-raise the exception if it's not a rate limit error
-        else:
-            print(f"Max retries reached for fetching deals.")
-            break
-    return deals
+    return fetch_deals(start_date=start_date, end_date=end_date)
 
 
 def fetch_deals_and_stage_histories(start_date=None, end_date=None):
-    deals = fetch_all_deals(start_date, end_date)
-    deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
-    deals = fetch_and_attach_owner_details(deals, "team_member_1")
+    """Fetch deals with stage histories and owner details - optimized version."""
+    deals = fetch_deals(start_date, end_date)
+
+    # Run both owner fetches in parallel using async
+    async def fetch_all_owners():
+        await asyncio.gather(
+            fetch_and_attach_owner_details_async(deals, "hubspot_owner_id"),
+            fetch_and_attach_owner_details_async(deals, "team_member_1"),
+        )
+
+    asyncio.run(fetch_all_owners())
+
     # Fetch all stage histories asynchronously with batching and delays
     stage_mapping = get_stage_mapping()
     stage_histories = asyncio.run(fetch_all_stage_histories(deals, stage_mapping))
+
     # Merge the stage histories into the deals
     for deal in deals:
         deal_id = deal["id"]
         deal["deal_stage_history"] = stage_histories.get(deal_id, [])
+
     return deals
 
 
-# Example usage:
-# start_date and end_date need to be in Unix timestamp format in milliseconds
-# deals_with_history = fetch_deals_and_stage_histories(start_date, end_date)
-
-
-def fetch_deals(start_date=None, end_date=None):
+def fetch_deals(start_date=None, end_date=None, include_stage_history=False):
     properties = [
         "dealname",
         "priority",
@@ -845,13 +510,43 @@ def fetch_deals(start_date=None, end_date=None):
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
-                    delay = base_delay * (attempt ** 2)
+                    delay = base_delay * (attempt**2)
                     time.sleep(delay)
                 else:
                     print(f"Attempt {attempt + 1} failed: {e}. No more retries left.")
                     raise
 
-        deals.extend(search_results.get("results", []))
+        fetched_deals = search_results.get("results", [])
+
+        # If including stage history, fetch it inline
+        if include_stage_history:
+            stage_mapping = get_stage_mapping()
+            for deal in fetched_deals:
+                deal_id = deal["id"]
+                url = f"https://api.hubapi.com/crm/v3/objects/deals/{deal_id}"
+                headers = {
+                    "Authorization": f"Bearer {HUBSPOT_API_KEY}",
+                    "Content-Type": "application/json",
+                }
+                params = {"propertiesWithHistory": "dealstage"}
+                response = requests.get(url, headers=headers, params=params)
+                if response.status_code == 200:
+                    deal_stage_history = response.json()["propertiesWithHistory"][
+                        "dealstage"
+                    ]
+                    for stage in deal_stage_history:
+                        stage_id = stage["value"]
+                        stage["stage_name"] = stage_mapping.get(
+                            stage_id, "Unknown Stage"
+                        )
+                    deal["deal_stage_history"] = deal_stage_history
+                else:
+                    logging.error(
+                        f"Failed to retrieve stage history: {response.status_code}"
+                    )
+                    deal["deal_stage_history"] = []
+
+        deals.extend(fetched_deals)
         pagination = search_results.get("paging", [])
         if pagination and "next" in pagination:
             after = pagination["next"]["after"]
@@ -859,70 +554,6 @@ def fetch_deals(start_date=None, end_date=None):
             break
     return deals
 
-
-# def get_engagements_for_deal(deal_id):
-#     url = f"https://api.hubapi.com/engagements/v1/engagements/associated/deal/{deal_id}/paged"
-#     headers = {
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#         "Content-Type": "application/json",
-#     }
-#     response = requests.get(url, headers=headers)
-#     response.raise_for_status()
-#     return response.json()
-
-
-# def fetch_attachment(file_id):
-#     url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
-#     headers = {
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#         "Content-Type": "application/json",
-#         "User-Agent": "Custom",
-#     }
-#     response = requests.get(url, headers=headers)
-#     response.raise_for_status()
-#     file_url = response.json()["url"]
-#     extension = response.json()["extension"]
-#     name = response.json()["name"]
-#     file_response = requests.get(file_url)
-#     file_content = file_response.content
-#     if extension == "pdf":
-#         return read_pdf(file_content)
-#     elif extension == "docx":
-#         return read_word(file_content)
-#     elif extension == "xlsx":
-#         return read_excel(file_content)
-#     elif extension == "pptx":
-#         return read_ppt(file_content)
-#     else:
-#         raise ValueError(f"Unsupported file type: {extension} for {name}")
-
-# async def fetch_attachment(session, file_id):
-#     url = f"https://api.hubapi.com/filemanager/api/v3/files/{file_id}/signed-url"
-#     headers = {
-#         "Authorization": f"Bearer {HUBSPOT_API_KEY}",
-#         "Content-Type": "application/json",
-#         "User-Agent": "Custom",
-#     }
-#     async with session.get(url, headers=headers) as response:
-#         response.raise_for_status()
-#         data = await response.json()
-#         file_url = data["url"]
-#         extension = data["extension"]
-#         name = data["name"]
-#
-#         async with session.get(file_url) as file_response:
-#             file_content = await file_response.read()
-#
-#         if extension == "pdf":
-#             return read_pdf(file_content)
-#         elif extension == "docx":
-#             return read_word(file_content)
-#         elif extension == "xlsx":
-#             return read_excel(file_content)
-#         elif extension == "pptx":
-#             return read_ppt(file_content)
-#         else:
-#             raise ValueError(f"Unsupported file type: {extension} for {name}")
 
 def organize_deals(deals):
     deals_dict = {}
@@ -976,7 +607,7 @@ def parse_with_chatgpt(openai_client, deal):
             },
         ]
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5",
             messages=messages,
             max_tokens=2500,
             n=1,
@@ -994,6 +625,7 @@ user_prompt_for_final = read_prompt_text(user_prompt_for_final_path)
 
 system_prompt_for_final_path = "data/system_prompt_for_final.txt"
 system_prompt_for_final = read_prompt_text(system_prompt_for_final_path)
+
 
 def batch_with_chatgpt(openai_client, deals):
     jsonl_lines = []
@@ -1076,10 +708,6 @@ def delete_batch_file(openai_client, batch):
     openai_client.files.delete(batch.output_file_id)
 
 
-# for file in files:
-#     openai_client.files.delete(file.id)
-
-
 def compile_with_chatgpt(openai_client, cleaned_deals):
     try:
         messages = [
@@ -1090,7 +718,7 @@ def compile_with_chatgpt(openai_client, cleaned_deals):
             },
         ]
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5",
             messages=messages,
             max_tokens=2500,
             n=1,
@@ -1241,12 +869,16 @@ def get_deal_stage_history(deals):
     return deals
 
 
-async def fetch_notes_attachments_and_engagements(deals, batch_size=4, delay_between_batches=1.2):
+async def fetch_notes_attachments_and_engagements(
+    deals, batch_size=4, delay_between_batches=1.2
+):
     sslcontext = ssl.create_default_context(cafile=certifi.where())
 
-    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=sslcontext)) as session:
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=sslcontext)
+    ) as session:
         for i in range(0, len(deals), batch_size):
-            batch = deals[i:i + batch_size]
+            batch = deals[i : i + batch_size]
             tasks = [fetch_data_for_deal(session, deal["id"]) for deal in batch]
             results = await asyncio.gather(*tasks)
 
@@ -1263,9 +895,13 @@ async def fetch_data_for_deal(session, deal_id):
     notes_task = fetch_notes(session, deal_id)
     engagements_task = fetch_engagements(session, deal_id)
 
-    notes_result, engagements_result = await asyncio.gather(notes_task, engagements_task)
+    notes_result, engagements_result = await asyncio.gather(
+        notes_task, engagements_task
+    )
 
-    notes, attachments = await process_notes_for_attachments(session, notes_result['results'])
+    notes, attachments = await process_notes_for_attachments(
+        session, notes_result["results"]
+    )
 
     return {
         "notes": notes,
@@ -1302,11 +938,15 @@ async def fetch_notes(session, deal_id):
             if response.status == 200:
                 return await response.json()
             elif response.status == 429:  # Rate limit error
-                print(f"Rate limit hit: waiting {backoff_time} seconds before retrying...")
+                print(
+                    f"Rate limit hit: waiting {backoff_time} seconds before retrying..."
+                )
                 await asyncio.sleep(backoff_time)
                 backoff_time *= 2  # Exponentially increase backoff time
             else:
-                print(f"Failed to retrieve deal data: {response.status} {await response.text()}")
+                print(
+                    f"Failed to retrieve deal data: {response.status} {await response.text()}"
+                )
                 return None
 
     print(f"Max retries reached for deal {deal_id}.")
@@ -1392,47 +1032,61 @@ async def fetch_engagements(session, deal_id, engagement_type="EMAIL"):
     return engagements
 
 
-
-
-
 def export_csv(start_date=None, end_date=None):
-    # deals = fetch_deals(start_date=start_date, end_date=end_date)
-    # deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
-    # deals = fetch_and_attach_owner_details(deals, "team_member_1")
-    # deals = get_deal_stage_history(deals)
+    """Export deals data to CSV with improved error handling and performance."""
+    logging.info(f"Starting CSV export for dates: {start_date} to {end_date}")
+
+    # Fetch deals with all enriched data
     deals = fetch_deals_and_stage_histories(start_date, end_date)
-    fetched_deal_properties = fetch_deal_properties()
-    fund = None
+    logging.info(f"Fetched {len(deals)} deals")
+
+    # Fetch and process fund mapping
     fund_mapping = {}
-    for p in fetched_deal_properties:
-        if p['name'] == 'fund':
-            fund = p
-            options = fund['options']
-            for option in options:
-                fund_mapping[option['value']] = option['label']
+    try:
+        fetched_deal_properties = fetch_deal_properties()
+        for prop in fetched_deal_properties:
+            if prop.get("name") == "fund" and "options" in prop:
+                for option in prop["options"]:
+                    fund_mapping[option.get("value")] = option.get(
+                        "label", option.get("value")
+                    )
+    except Exception as e:
+        logging.warning(f"Could not fetch fund mapping: {e}")
+
     flattened_data = []
     for deal in deals:
-        flattened_entry = deal["properties"].copy()
-        flattened_entry["id"] = deal["id"]
-        flattened_entry["createdAt"] = deal["createdAt"]
-        flattened_entry["updatedAt"] = deal["updatedAt"]
-        flattened_entry["archived"] = deal["archived"]
+        # Start with properties but avoid full copy for memory efficiency
+        flattened_entry = {}
+        flattened_entry.update(deal.get("properties", {}))
+        flattened_entry["id"] = deal.get("id")
+        flattened_entry["createdAt"] = deal.get("createdAt")
+        flattened_entry["updatedAt"] = deal.get("updatedAt")
+        flattened_entry["archived"] = deal.get("archived", False)
+
+        # Safe fund mapping with fallback
         if "fund" in flattened_entry and flattened_entry["fund"]:
-            mapped_fund = fund_mapping[flattened_entry["fund"]]
-            flattened_entry["fund"] = mapped_fund
-        # Concatenate firstName and lastName for Lead Owner
+            flattened_entry["fund"] = fund_mapping.get(
+                flattened_entry["fund"],
+                flattened_entry["fund"],  # Keep original if not in mapping
+            )
+        # Safe extraction of Lead Owner details
         if deal.get("hubspot_owner_id_details"):
             lead_owner = deal.get("hubspot_owner_id_details")
-            flattened_entry["Lead Owner Name"] = f"{lead_owner['firstName']} {lead_owner['lastName']}"
-            flattened_entry["Lead Owner Email"] = lead_owner["email"]
+            first_name = lead_owner.get("firstName", "")
+            last_name = lead_owner.get("lastName", "")
+            flattened_entry["Lead Owner Name"] = f"{first_name} {last_name}".strip()
+            flattened_entry["Lead Owner Email"] = lead_owner.get("email", "")
         else:
             flattened_entry["Lead Owner Name"] = ""
             flattened_entry["Lead Owner Email"] = ""
-        # Concatenate firstName and lastName for Support Member
+
+        # Safe extraction of Support Member details
         if deal.get("team_member_1_details"):
             support_member = deal.get("team_member_1_details")
-            flattened_entry["Support Member Name"] = f"{support_member['firstName']} {support_member['lastName']}"
-            flattened_entry["Support Member Email"] = support_member["email"]
+            first_name = support_member.get("firstName", "")
+            last_name = support_member.get("lastName", "")
+            flattened_entry["Support Member Name"] = f"{first_name} {last_name}".strip()
+            flattened_entry["Support Member Email"] = support_member.get("email", "")
         else:
             flattened_entry["Support Member Name"] = ""
             flattened_entry["Support Member Email"] = ""
@@ -1441,73 +1095,80 @@ def export_csv(start_date=None, end_date=None):
         if "deal_stage_history" in deal and deal["deal_stage_history"]:
             stages = deal["deal_stage_history"]
             stages.sort(key=lambda x: x.get("timestamp", 0))  # Sort by timestamp
+
+            # Process transitions between stages
             for i in range(len(stages) - 1):
                 stage_name = stages[i].get("stage_name", "Unknown Stage")
                 entry_timestamp = stages[i].get("timestamp")
-                entry_time = parser.parse(entry_timestamp)
                 exit_timestamp = stages[i + 1].get("timestamp")
-                exit_time = parser.parse(exit_timestamp)
-                duration = (exit_time - entry_time).days
-                if stage_name in stage_durations:
-                    stage_durations[stage_name] += duration
-                else:
-                    stage_durations[stage_name] = duration
-                # Handle the last stage, which might still be active
-                last_stage_name = stages[-1].get("stage_name", "Unknown Stage")
-                last_entry_timestamp = stages[-1].get("timestamp")
-                last_entry_time = parser.parse(last_entry_timestamp)
-                last_exit_time = datetime.now(
-                    timezone.utc
-                )  # Assuming the deal is still in the last stage
-                last_duration = (last_exit_time - last_entry_time).days
-                if last_stage_name in stage_durations:
-                    stage_durations[last_stage_name] += last_duration
-                else:
-                    stage_durations[last_stage_name] = last_duration
+
+                try:
+                    entry_time = parser.parse(entry_timestamp)
+                    exit_time = parser.parse(exit_timestamp)
+                    duration = (exit_time - entry_time).days
+                    stage_durations[stage_name] = (
+                        stage_durations.get(stage_name, 0) + duration
+                    )
+                except Exception as e:
+                    logging.warning(
+                        f"Error parsing timestamps for deal {deal.get('id')}: {e}"
+                    )
+
+            # Handle the last stage (current stage) - calculated ONCE outside the loop
+            if stages:
+                last_stage = stages[-1]
+                last_stage_name = last_stage.get("stage_name", "Unknown Stage")
+                last_entry_timestamp = last_stage.get("timestamp")
+
+                try:
+                    last_entry_time = parser.parse(last_entry_timestamp)
+                    last_exit_time = datetime.now(timezone.utc)
+                    last_duration = (last_exit_time - last_entry_time).days
+                    stage_durations[last_stage_name] = (
+                        stage_durations.get(last_stage_name, 0) + last_duration
+                    )
+                except Exception as e:
+                    logging.warning(
+                        f"Error parsing last stage timestamp for deal {deal.get('id')}: {e}"
+                    )
         for stage_name, duration in stage_durations.items():
             flattened_entry[f"{stage_name}_days_in_stage"] = duration
         flattened_data.append(flattened_entry)
         # Convert to DataFrame
     df = pd.DataFrame(flattened_data)
-    # List of columns to exclude
-    columns_to_exclude = ["hs_object_id", "archived", "hs_lastmodifieddate", "hubspot_owner_id", "pipeline",
-                          "team_member_1", "id", "createdAt", "updatedAt", "Lead Owner Email", "Support Member Email"]
-    # Drop the columns you want to exclude
-    df = df.drop(columns=columns_to_exclude)
+    # List of columns to exclude (only drop if they exist)
+    columns_to_exclude = [
+        "hs_object_id",
+        "archived",
+        "hs_lastmodifieddate",
+        "hubspot_owner_id",
+        "pipeline",
+        "team_member_1",
+        "id",
+        "createdAt",
+        "updatedAt",
+        "Lead Owner Email",
+        "Support Member Email",
+    ]
+    # Drop only columns that exist in the dataframe
+    columns_to_drop = [col for col in columns_to_exclude if col in df.columns]
+    if columns_to_drop:
+        df = df.drop(columns=columns_to_drop)
     if start_date is None and end_date is None:
         start_date = str(datetime.now().date() + relativedelta(months=-3))
         end_date = str(datetime.now().date() + relativedelta(days=+1))
     start_date = str(datetime.strptime(start_date, "%Y-%m-%d").date())
     end_date = str(datetime.strptime(end_date, "%Y-%m-%d").date())
-    # Save to CSV
+    # Generate filename with proper date handling
     filename = f"Deal_Export--{start_date}-{end_date}.csv"
+
+    # Create CSV in memory
     file_object = io.StringIO()
     df.to_csv(file_object, index=False)
     file_object.seek(0)
-    return file_object, filename
-    # df.to_csv(filename, index=False)
 
-# def generate_keywords(start_date=None, end_date=None):
-#     deals = fetch_deals(start_date='2019-07-28', end_date='2024-07-28')
-#     deals = fetch_and_attach_owner_details(deals, "hubspot_owner_id")
-#     deals = fetch_and_attach_owner_details(deals, "team_member_1")
-#     deals = attach_notes(deals)
-#
-#     deals = attach_attachments(deals)
-#     deals = attach_engagements(deals)
-#
-#     batch = batch_with_chatgpt(openai_client, deals)
-#
-#
-# def orchestrator(context: df.DurableOrchestrationContext):
-#     deals = yield context.call_activity('FetchDeals', date_data: dict)
-#
-#     deals = yield context.call_activity('FetchAndAttachOwnerDetails', input)
-#
-#     deals = yield context.call_activity('FetchAndAttachOwnerDetails', input)
-#
-#     deals = yield context.call_activity('AttachNotes', deals)
-#
-#     deals = yield context.call_activity('AttachAttachments', deals)
-#
-#     batch = yield context.call_activity('BatchWithChatgpt', )
+    # Log export metrics
+    logging.info(f"CSV export completed: {len(df)} rows, {len(df.columns)} columns")
+    logging.info(f"Filename: {filename}")
+
+    return file_object, filename
